@@ -1,0 +1,360 @@
+---
+title: "Vault Setup and Configuration"
+description: "HashiCorp Vault deployment with KMS auto-unseal, PostgreSQL backend, and application load balancer"
+---
+
+## Overview
+
+The Vault configuration deploys a HashiCorp Vault instance on EC2 with KMS-based auto-unsealing, PostgreSQL storage backend, and an Application Load Balancer for high availability and TLS termination.
+
+## Infrastructure Components
+
+### TLS Certificate
+
+ACM certificate for HTTPS access to Vault:
+
+```hcl
+resource "aws_acm_certificate" "vault" {
+  domain_name       = "vault.pennlabs.org"
+  validation_method = "DNS"
+}
+
+resource "aws_route53_record" "vault-tls-validation" {
+  for_each = {
+    for dvo in aws_acm_certificate.vault.domain_validation_options : dvo.domain_name => {
+      name   = dvo.resource_record_name
+      record = dvo.resource_record_value
+      type   = dvo.resource_record_type
+    }
+  }
+  allow_overwrite = true
+  name            = each.value.name
+  records         = [each.value.record]
+  ttl             = 60
+  type            = each.value.type
+  zone_id         = module.domains["pennlabs.org"].zone_id
+}
+```
+
+### KMS Key
+
+KMS key for Vault auto-unseal:
+
+```hcl
+resource "aws_kms_key" "vault" {
+  description = "Key to unseal vault"
+
+  tags = {
+    created-by = "terraform"
+  }
+}
+```
+
+This key allows Vault to automatically unseal on restart without manual intervention.
+
+## IAM Configuration
+
+### Vault IAM Role
+
+EC2 instance role for Vault:
+
+```hcl
+resource "aws_iam_role" "vault" {
+  name = "vault"
+  assume_role_policy = data.aws_iam_policy_document.assume-role-policy.json
+
+  tags = {
+    created-by = "terraform"
+  }
+}
+```
+
+### IAM Permissions
+
+**KMS access** for auto-unseal:
+
+```hcl
+data "aws_iam_policy_document" "vault-kms" {
+  statement {
+    actions = [
+      "kms:Decrypt",
+      "kms:Encrypt",
+      "kms:DescribeKey"
+    ]
+    resources = [aws_kms_key.vault.arn]
+  }
+}
+```
+
+**IAM read access** for authentication:
+
+```hcl
+data "aws_iam_policy_document" "vault-iam" {
+  statement {
+    actions = [
+      "iam:GetUser",
+      "iam:GetRole"
+    ]
+    resources = ["arn:aws:iam::*:role/*"]
+  }
+}
+```
+
+### Instance Profile
+
+```hcl
+resource "aws_iam_instance_profile" "vault" {
+  name = "vault"
+  role = aws_iam_role.vault.name
+}
+```
+
+## EC2 Instance
+
+Vault server deployment:
+
+```hcl
+resource "aws_instance" "vault" {
+  ami                    = local.vault_ami
+  instance_type          = "t3.small"
+  subnet_id              = module.vpc.public_subnets[0]
+  vpc_security_group_ids = [aws_security_group.vault.id]
+  iam_instance_profile   = aws_iam_instance_profile.vault.name
+  key_name               = aws_key_pair.admin.key_name
+  user_data = templatefile("files/vault_user_data.sh", {
+    connection_url = format("postgres://vault:%s@%s/vault", random_password.postgres-password["vault"].result, aws_db_instance.production.endpoint)
+    kms_key_id     = aws_kms_key.vault.key_id
+  })
+  tags = {
+    Name       = "Vault"
+    created-by = "terraform"
+  }
+}
+```
+
+**Configuration:**
+- Instance type: `t3.small`
+- Deployed in first public subnet
+- Uses official Vault OSS AMI
+- PostgreSQL backend for storage
+- KMS auto-unseal configuration via user data
+
+### PostgreSQL Backend Initialization
+
+Creates the required table for Vault's PostgreSQL backend:
+
+```hcl
+provisioner "local-exec" {
+  command = <<EOF
+psql "postgres://vault:$VAULT_DB_PASSWORD@$VAULT_DB_ENDPOINT/vault" -c "
+  CREATE TABLE IF NOT EXISTS "vault_kv_store" (
+  parent_path TEXT COLLATE \"C\" NOT NULL,
+  path        TEXT COLLATE \"C\",
+  key         TEXT COLLATE \"C\",
+  value       BYTEA,
+  CONSTRAINT pkey PRIMARY KEY (path, key)
+);
+
+CREATE INDEX IF NOT EXISTS parent_path_idx ON vault_kv_store (parent_path);
+"
+    EOF
+  environment = {
+    VAULT_DB_PASSWORD = random_password.postgres-password["vault"].result
+    VAULT_DB_ENDPOINT = aws_db_instance.production.endpoint
+  }
+}
+```
+
+## Security Groups
+
+### Vault Instance Security Group
+
+```hcl
+resource "aws_security_group" "vault" {
+  name        = "vault"
+  description = "Allow TLS inbound traffic"
+  vpc_id      = module.vpc.vpc_id
+
+  ingress {
+    description     = "TLS from LB"
+    from_port       = 8200
+    to_port         = 8200
+    protocol        = "tcp"
+    security_groups = [aws_security_group.vault-lb.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+```
+
+**Allows:**
+- Inbound: Port 8200 from load balancer only
+- Outbound: All traffic (for RDS, KMS, etc.)
+
+### Load Balancer Security Group
+
+```hcl
+resource "aws_security_group" "vault-lb" {
+  name        = "vault-lb"
+  description = "Allow TLS inbound traffic"
+  vpc_id      = module.vpc.vpc_id
+
+  ingress {
+    description = "HTTP"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "TLS"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+```
+
+## Application Load Balancer
+
+### Load Balancer
+
+```hcl
+resource "aws_lb" "vault" {
+  name               = "vault"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.vault-lb.id]
+  subnets            = module.vpc.public_subnets
+
+  tags = {
+    created-by = "terraform"
+  }
+}
+```
+
+### Target Group
+
+```hcl
+resource "aws_lb_target_group" "vault" {
+  name     = "vault"
+  port     = 8200
+  protocol = "HTTPS"
+  vpc_id   = module.vpc.vpc_id
+
+  health_check {
+    protocol = "HTTPS"
+    path     = "/v1/sys/health?standbyok=true"
+  }
+}
+```
+
+**Health check:** Uses Vault's system health endpoint with `standbyok=true` to allow standby nodes to be considered healthy.
+
+### HTTPS Listener
+
+```hcl
+resource "aws_lb_listener" "vault" {
+  load_balancer_arn = aws_lb.vault.arn
+  port              = "443"
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-2016-08"
+  certificate_arn   = aws_acm_certificate_validation.vault.certificate_arn
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.vault.arn
+  }
+}
+```
+
+### Target Attachment
+
+```hcl
+resource "aws_lb_target_group_attachment" "vault" {
+  target_group_arn = aws_lb_target_group.vault.arn
+  target_id        = aws_instance.vault.id
+}
+```
+
+## Vault Module Configuration
+
+Post-bootstrap Vault setup (uncommented after initial deployment):
+
+```hcl
+module "vault" {
+  source              = "./modules/vault"
+  GF_GH_CLIENT_ID     = var.GF_GH_CLIENT_ID
+  GF_GH_CLIENT_SECRET = var.GF_GH_CLIENT_SECRET
+  GF_SLACK_URL        = var.GF_SLACK_URL
+  SECRET_SYNC_ARN     = module.iam-secret-sync.role-arn
+  TEAM_SYNC_ARN       = module.iam-products["team-sync"].role-arn
+}
+```
+
+## Configuration Parameters
+
+<ParamField path="domain_name" type="string" default="vault.pennlabs.org">
+  Domain name for Vault access
+</ParamField>
+
+<ParamField path="instance_type" type="string" default="t3.small">
+  EC2 instance type for Vault server
+</ParamField>
+
+<ParamField path="vault_ami" type="string" required>
+  Official Vault OSS AMI (from `local.vault_ami`)
+</ParamField>
+
+<ParamField path="GF_GH_CLIENT_ID" type="string" required>
+  GitHub OAuth client ID for Grafana integration (variable)
+</ParamField>
+
+<ParamField path="GF_GH_CLIENT_SECRET" type="string" required>
+  GitHub OAuth client secret for Grafana integration (variable)
+</ParamField>
+
+<ParamField path="GF_SLACK_URL" type="string" required>
+  Slack webhook URL for notifications (variable)
+</ParamField>
+
+## Dependencies
+
+- **VPC Module** (`vpc.tf`): Provides public subnets for Vault and load balancer
+- **RDS Module** (`rds.tf`): Provides PostgreSQL backend storage
+- **Route53**: Requires domain module for DNS validation
+- **IAM Modules**: Requires secret-sync and team-sync IAM roles
+
+## Secrets Stored
+
+Vault stores various application secrets:
+
+**Database backup credentials:**
+```hcl
+resource "vault_generic_secret" "db-backup" {
+  path = "${module.vault.secrets-path}/production/default/db-backup"
+
+  data_json = jsonencode({
+    "DATABASE_URL" = "postgres://${postgresql_role.readonly_role["backups"].name}:${postgresql_role.readonly_role["backups"].password}@${aws_db_instance.production.endpoint}"
+    "S3_BUCKET"    = "sql.pennlabs.org"
+  })
+}
+```
+
+**Application database URLs** (automatically created for each service)
+
+**Team sync credentials** (GitHub token for org synchronization)

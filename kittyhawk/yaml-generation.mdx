@@ -1,0 +1,116 @@
+---
+title: "YAML Generation"
+description: "Understand how Kittyhawk generates Kubernetes YAML files from TypeScript constructs"
+---
+
+## Overview
+
+Kittyhawk uses [cdk8s](https://cdk8s.io/) to synthesize Kubernetes YAML files from your TypeScript deployment configuration. This process is called "synthesis" or "synth".
+
+## How cdk8s Synth Works
+
+The synthesis process transforms your TypeScript constructs into Kubernetes YAML manifests:
+
+1. **Compilation**: TypeScript code is compiled to JavaScript
+2. **Synthesis**: The cdk8s framework executes your code and generates YAML
+3. **Output**: YAML files are written to the `dist` directory
+
+## Required Environment Variables
+
+For YAML generation to work properly, you must set the following environment variables:
+
+<ParamField path="RELEASE_NAME" type="string" required>
+  The name of the application being deployed. This should be set to your repository name.
+</ParamField>
+
+<ParamField path="GIT_SHA" type="string" required>
+  The SHA of the latest commit. Used for image tagging and versioning.
+</ParamField>
+
+## Output Structure
+
+After running the synthesis command, the generated YAML file will be located at:
+
+```
+k8s/dist/RELEASE_NAME.k8s.yaml
+```
+
+This file contains all the Kubernetes resources defined in your TypeScript configuration, including:
+
+- Deployments
+- Services
+- Ingresses
+- CronJobs
+- ConfigMaps and Secrets
+- Any other Kubernetes resources you've defined
+
+## Local Testing Commands
+
+<Warning>
+These commands are for **local testing purposes only**. In production, YAML generation should be handled automatically by your CI pipeline.
+</Warning>
+
+### Step 1: Navigate to k8s Directory
+
+First, change to your `k8s` directory:
+
+```bash
+cd k8s
+```
+
+### Step 2: Set Environment Variables
+
+Set the required environment variables:
+
+```bash
+export RELEASE_NAME="your-app-name"
+export GIT_SHA="$(git rev-parse HEAD)"
+```
+
+### Step 3: Generate YAML
+
+Run the compile and synthesis commands:
+
+```bash
+yarn compile && yarn synth
+```
+
+### Step 4: Verify Output
+
+Check the generated YAML file:
+
+```bash
+cat dist/$RELEASE_NAME.k8s.yaml
+```
+
+## Testing in Development
+
+When running tests locally, you can use placeholder values for the environment variables:
+
+```bash
+export GIT_SHA='TESTSHA'
+export AWS_ACCOUNT_ID='TEST_AWS_ACCOUNT_ID'
+yarn test
+```
+
+This is the same approach used in the Kittyhawk test suite (see `package.json` scripts).
+
+## Troubleshooting
+
+### Missing Environment Variables
+
+If you see errors about missing environment variables, ensure both `RELEASE_NAME` and `GIT_SHA` are set before running synthesis.
+
+### Synthesis Errors
+
+If synthesis fails:
+
+1. Check your TypeScript code for errors: `yarn compile`
+2. Verify all constructs are properly imported
+3. Ensure your chart extends `PennLabsChart`
+
+## Next Steps
+
+- Learn about [GitHub Actions integration](/kittyhawk/github-actions)
+- Explore Kittyhawk constructs like [DjangoApplication](/kittyhawk/django-application) and [CronJobs](/kittyhawk/cronjobs)
+- Read the [cdk8s documentation](https://cdk8s.io/docs/latest/)

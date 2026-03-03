@@ -1,0 +1,209 @@
+---
+title: "Quickstart"
+description: "Deploy your first application with Kittyhawk in minutes"
+---
+
+This guide will walk you through creating a complete deployment configuration with Kittyhawk, including a React frontend, Django backend, Redis instance, and a scheduled cron job.
+
+## Create Your First Chart
+
+<Steps>
+  <Step title="Import Kittyhawk constructs">
+    In your `main.ts` file, import the necessary constructs from Kittyhawk:
+
+    ```typescript
+    import { Construct } from 'constructs';
+    import { 
+      PennLabsChart, 
+      ReactApplication, 
+      DjangoApplication, 
+      RedisApplication, 
+      CronJob 
+    } from '@pennlabs/kittyhawk';
+
+    const cronTime = require('cron-time-generator');
+    ```
+  </Step>
+
+  <Step title="Create a PennLabsChart">
+    Extend the `PennLabsChart` class to create your deployment configuration:
+
+    ```typescript
+    export class ExampleChart extends PennLabsChart {
+      constructor(scope: Construct) {
+        super(scope);
+
+        // Configuration will go here
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="Define your application images and configuration">
+    Set up the basic configuration variables:
+
+    ```typescript
+    const backendImage = 'pennlabs/example-backend';
+    const frontendImage = 'pennlabs/examplefrontend';
+    const secret = 'secret';
+    const domain = 'domain';
+    ```
+  </Step>
+
+  <Step title="Add a Redis instance">
+    Deploy a Redis instance for caching or session storage:
+
+    ```typescript
+    new RedisApplication(this, 'redis', {});
+    ```
+  </Step>
+
+  <Step title="Deploy your Django backend">
+    Configure your Django application with ASGI support:
+
+    ```typescript
+    new DjangoApplication(this, 'django-asgi', {
+      deployment: {
+        image: backendImage,
+        cmd: ['/usr/local/bin/asgi-run'],
+        replicas: 2,
+        secret: secret,
+        env: [
+          { name: 'REDIS_HOST', value: 'redis' },
+        ],
+      },
+      djangoSettingsModule: 'example.settings.production',
+      domains: [{ host: domain, paths: ['/api/ws'] }],
+    });
+    ```
+  </Step>
+
+  <Step title="Deploy your React frontend">
+    Configure your React application:
+
+    ```typescript
+    new ReactApplication(this, 'react', {
+      deployment: {
+        image: frontendImage,
+        replicas: 2,
+      },
+      domain: { host: domain, paths: ['/'] },
+      portEnv: '80',
+    });
+    ```
+  </Step>
+
+  <Step title="Add a scheduled cron job">
+    Create a cron job that runs daily at 8 AM:
+
+    ```typescript
+    new CronJob(this, 'example-cronjob', {
+      schedule: cronTime.everyDayAt(8),
+      image: backendImage,
+      secret: secret,
+      cmd: ['your', 'command'],
+    });
+    ```
+  </Step>
+</Steps>
+
+## Complete Example
+
+Here's the complete `main.ts` file combining all the steps above:
+
+```typescript
+import { Construct } from 'constructs';
+import { PennLabsChart, ReactApplication, DjangoApplication, RedisApplication, CronJob } from '@pennlabs/kittyhawk';
+
+const cronTime = require('cron-time-generator');
+
+export class ExampleChart extends PennLabsChart {
+  constructor(scope: Construct) {
+    super(scope);
+
+    const backendImage = 'pennlabs/example-backend';
+    const frontendImage = 'pennlabs/examplefrontend';
+
+    const secret = 'secret';
+    const domain = 'domain';
+
+    new RedisApplication(this, 'redis', {});
+
+    new DjangoApplication(this, 'django-asgi', {
+      deployment: {
+        image: backendImage,
+        cmd: ['/usr/local/bin/asgi-run'],
+        replicas: 2,
+        secret: secret,
+        env: [
+          { name: 'REDIS_HOST', value: 'redis' },
+        ],
+      },
+      djangoSettingsModule: 'example.settings.production',
+      domains: [{ host: domain, paths: ['/api/ws'] }],
+    });
+
+    new ReactApplication(this, 'react', {
+      deployment: {
+        image: frontendImage,
+        replicas: 2,
+      },
+      domain: { host: domain, paths: ['/'] },
+      portEnv: '80',
+    });
+
+    /** Cronjobs **/
+    new CronJob(this, 'example-cronjob', {
+      schedule: cronTime.everyDayAt(8),
+      image: backendImage,
+      secret: secret,
+      cmd: ['your', 'command'],
+    });
+  }
+}
+```
+
+## Generating YAML (Local Testing)
+
+<Warning>
+You should **NOT** generate YAML manually for production. YAML generation should be handled by your CI/CD pipeline via [Kraken](https://kraken.pennlabs.org/).
+</Warning>
+
+For local testing only, you can generate YAML:
+
+1. Navigate to your `k8s` directory:
+   ```bash
+   cd k8s
+   ```
+
+2. Set required environment variables:
+   ```bash
+   export RELEASE_NAME="your-app-name"
+   export GIT_SHA="$(git rev-parse HEAD)"
+   ```
+
+3. Generate the YAML:
+   ```bash
+   yarn compile && yarn synth
+   ```
+
+4. Find the generated YAML in the `dist` folder:
+   ```bash
+   ls dist/
+   # Output: RELEASE_NAME.k8s.yaml
+   ```
+
+## CI/CD Integration
+
+In production, the `DeployJob` in [Kraken](https://github.com/pennlabs/infrastructure/tree/master/cdk/kraken) handles YAML generation automatically. For more information, see the [Kraken documentation](https://kraken.pennlabs.org/).
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="API Reference" icon="book" href="https://kittyhawk.pennlabs.org">
+    Explore the full Kittyhawk API documentation
+  </Card>
+  <Card title="Kraken Integration" icon="ship" href="https://kraken.pennlabs.org">
+    Learn how to integrate with Penn Labs' CI/CD pipeline
+  </Card>
+</CardGroup>

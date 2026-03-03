@@ -1,0 +1,268 @@
+---
+title: "Certificate"
+description: "Manage TLS certificates for Kubernetes ingress using cert-manager"
+---
+
+The `Certificate` construct creates cert-manager Certificate resources for automatic TLS certificate provisioning and renewal using Let's Encrypt.
+
+## Constructor
+
+```typescript
+new Certificate(scope: Construct, appname: string, rules: HostRules)
+```
+
+## Parameters
+
+<ParamField path="scope" type="Construct" required>
+  The parent construct (typically `this` in your chart).
+</ParamField>
+
+<ParamField path="appname" type="string" required>
+  The application name, used for naming the certificate resource.
+</ParamField>
+
+<ParamField path="rules" type="HostRules" required>
+  Host configuration containing:
+  - `host`: The domain name (e.g., `"example.com"`)
+  - `paths`: Array of paths (not used by Certificate, but part of HostRules)
+  - `isSubdomain`: Whether this is a subdomain for certificate naming purposes
+</ParamField>
+
+## Behavior
+
+The `Certificate` construct:
+
+1. **Generates certificate name**: Uses `domainToCertName()` to create a dash-separated name
+2. **Determines domain**: Uses `removeSubdomain()` if `isSubdomain` is true
+3. **Creates wildcard certificate**: Generates a certificate for both the domain and `*.domain`
+4. **Stores in secret**: Creates a Kubernetes secret named `{certName}-tls`
+5. **Uses ClusterIssuer**: References the `wildcard-letsencrypt-prod` ClusterIssuer
+6. **Removes extra labels**: Strips `app.kubernetes.io/part-of` and `app.kubernetes.io/version` labels
+
+## Certificate Naming
+
+The certificate name and domain are determined by the `isSubdomain` flag:
+
+### When `isSubdomain: false` (default)
+
+```typescript
+host: "api.example.com"
+isSubdomain: false
+
+// Results in:
+certName: "api-example-com"
+finalDomain: "api.example.com"
+dnsNames: ["api.example.com", "*.api.example.com"]
+secretName: "api-example-com-tls"
+```
+
+### When `isSubdomain: true`
+
+```typescript
+host: "api.example.com"
+isSubdomain: true
+
+// Results in:
+certName: "example-com"
+finalDomain: "example.com"
+dnsNames: ["example.com", "*.example.com"]
+secretName: "example-com-tls"
+```
+
+## Usage Examples
+
+### Basic Certificate
+
+```typescript
+import { Certificate } from '@pennlabs/kittyhawk';
+
+new Certificate(this, 'my-app', {
+  host: 'example.com',
+  paths: ['/'],
+  isSubdomain: false,
+});
+```
+
+This creates a certificate for `example.com` and `*.example.com`.
+
+### Subdomain Certificate
+
+```typescript
+new Certificate(this, 'api', {
+  host: 'api.example.com',
+  paths: ['/'],
+  isSubdomain: true,
+});
+```
+
+This creates a certificate for `example.com` and `*.example.com` (parent domain), which covers `api.example.com`.
+
+### Multiple Subdomains Sharing a Certificate
+
+```typescript
+// Create one certificate for the parent domain
+new Certificate(this, 'main', {
+  host: 'example.com',
+  paths: ['/'],
+  isSubdomain: false,
+});
+
+// These use the parent certificate via isSubdomain: true
+// (only create ingress, not additional certificates)
+const subdomains = [
+  { host: 'api.example.com', paths: ['/'] },
+  { host: 'admin.example.com', paths: ['/'] },
+  { host: 'dashboard.example.com', paths: ['/'] },
+];
+```
+
+### Certificate for Different Domains
+
+```typescript
+// Each domain gets its own certificate
+new Certificate(this, 'domain1', {
+  host: 'example.com',
+  paths: ['/'],
+});
+
+new Certificate(this, 'domain2', {
+  host: 'another-domain.org',
+  paths: ['/'],
+});
+```
+
+## Generated Kubernetes Resource
+
+The construct generates a cert-manager Certificate resource:
+
+```yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: example-com
+  labels:
+    app.kubernetes.io/name: example-com
+    app.kubernetes.io/component: certificate
+spec:
+  secretName: example-com-tls
+  dnsNames:
+    - example.com
+    - "*.example.com"
+  issuerRef:
+    name: wildcard-letsencrypt-prod
+    kind: ClusterIssuer
+    group: cert-manager.io
+```
+
+## How It Works with Ingress
+
+The Certificate construct works with the Ingress construct:
+
+1. **Certificate creates secret**: The Certificate creates a secret (e.g., `example-com-tls`)
+2. **Ingress references secret**: The Ingress uses the same secret name in its TLS configuration
+3. **cert-manager manages renewal**: cert-manager automatically renews certificates before expiration
+
+Example integration:
+
+```typescript
+import { Certificate, Ingress } from '@pennlabs/kittyhawk';
+
+const domain = {
+  host: 'example.com',
+  paths: ['/'],
+  isSubdomain: false,
+};
+
+// Create certificate
+new Certificate(this, 'my-app', domain);
+
+// Create ingress (references the same secret)
+new Ingress(this, 'my-app', {
+  port: 80,
+  rules: [domain],
+});
+```
+
+## ClusterIssuer
+
+The Certificate uses the `wildcard-letsencrypt-prod` ClusterIssuer, which:
+
+- Uses Let's Encrypt production environment
+- Configured for wildcard certificate issuance
+- Handles ACME DNS-01 challenges
+- Must be set up in your cluster before using this construct
+
+## Common Patterns
+
+### Pattern 1: Application with Single Domain
+
+```typescript
+const domain = { host: 'app.example.com', paths: ['/'] };
+
+new Certificate(this, 'app', domain);
+new ReactApplication(this, 'app', {
+  deployment: { image: 'my-app', replicas: 2 },
+  domain,
+});
+```
+
+### Pattern 2: Application with Multiple Subdomains
+
+```typescript
+// Parent certificate for all subdomains
+new Certificate(this, 'parent', {
+  host: 'example.com',
+  paths: ['/'],
+});
+
+// Applications using subdomains
+new ReactApplication(this, 'api', {
+  deployment: { image: 'api', replicas: 2 },
+  domain: { host: 'api.example.com', paths: ['/'], isSubdomain: true },
+});
+
+new ReactApplication(this, 'admin', {
+  deployment: { image: 'admin', replicas: 1 },
+  domain: { host: 'admin.example.com', paths: ['/'], isSubdomain: true },
+});
+```
+
+### Pattern 3: Handled Automatically by Applications
+
+In most cases, you don't need to create Certificate resources manually. The `DjangoApplication` and `ReactApplication` constructs handle certificate creation internally:
+
+```typescript
+// Certificate is created automatically
+new ReactApplication(this, 'app', {
+  deployment: { image: 'my-app', replicas: 2 },
+  domain: { host: 'example.com', paths: ['/'] },
+});
+```
+
+## Troubleshooting
+
+### Certificate Not Issuing
+
+Check the Certificate status:
+
+```bash
+kubectl describe certificate example-com
+```
+
+### Verify ClusterIssuer Exists
+
+```bash
+kubectl get clusterissuer wildcard-letsencrypt-prod
+```
+
+### Check cert-manager Logs
+
+```bash
+kubectl logs -n cert-manager -l app=cert-manager
+```
+
+## Related
+
+- [Ingress](/kittyhawk/ingress) - Uses certificates for TLS
+- [DjangoApplication](/kittyhawk/django-application) - Automatically creates certificates
+- [ReactApplication](/kittyhawk/react-application) - Automatically creates certificates

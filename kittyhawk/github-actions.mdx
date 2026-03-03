@@ -1,0 +1,47 @@
+---
+title: "GitHub Actions Integration"
+description: "Learn how to integrate Kittyhawk with GitHub Actions for automated Kubernetes deployment"
+---
+
+## Overview
+
+Kittyhawk integrates seamlessly with GitHub Actions through [Kraken](https://kraken.pennlabs.org/), Penn Labs' CI/CD system. The deployment process automatically generates Kubernetes YAML files from your TypeScript constructs.
+
+## Important Note
+
+<Warning>
+You should **NOT** generate YAML manually and commit it to your repository. The YAML generation should be handled automatically by your CI pipeline.
+</Warning>
+
+## Using Kittyhawk with Kraken
+
+The `DeployJob` construct in [Kraken](https://github.com/pennlabs/infrastructure/tree/master/cdk/kraken) handles the YAML file generation process automatically. This job:
+
+1. Reads your TypeScript deployment configuration
+2. Generates the Kubernetes YAML files
+3. Deploys them to your cluster
+
+For detailed information on configuring the `DeployJob`, see the [Kraken documentation](https://kraken.pennlabs.org/).
+
+## Required Environment Variables
+
+For YAML generation to work properly in your CI pipeline, the following environment variables must be set:
+
+- **`RELEASE_NAME`**: The name of the application being deployed (typically set to the repository name)
+- **`GIT_SHA`**: The SHA of the latest commit (used for image tagging and versioning)
+
+## CI Workflow
+
+When you push code to your repository, the GitHub Actions workflow:
+
+1. Triggers the Kraken `DeployJob`
+2. Sets the required environment variables (`RELEASE_NAME` and `GIT_SHA`)
+3. Runs `yarn compile && yarn synth` in your `k8s` directory
+4. Generates the YAML file in the `dist` folder as `RELEASE_NAME.k8s.yaml`
+5. Deploys the generated YAML to your Kubernetes cluster
+
+## Next Steps
+
+- Learn more about [YAML generation](/kittyhawk/yaml-generation)
+- Review the [Kraken documentation](https://kraken.pennlabs.org/) for advanced deployment configurations
+- Explore Kittyhawk constructs like [DjangoApplication](/kittyhawk/django-application) and [ReactApplication](/kittyhawk/react-application)

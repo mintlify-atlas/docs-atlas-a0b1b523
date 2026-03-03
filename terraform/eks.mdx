@@ -1,0 +1,195 @@
+---
+title: "EKS Cluster Configuration"
+description: "Amazon EKS cluster setup with managed node groups, authentication, and spot instance termination handling"
+---
+
+## Overview
+
+The EKS (Elastic Kubernetes Service) configuration provisions a production-ready Kubernetes cluster on AWS with managed node groups, RBAC configuration, and essential cluster add-ons.
+
+## Core Resources
+
+### EKS Cluster Module
+
+The production EKS cluster is provisioned using the official AWS EKS Terraform module:
+
+```hcl
+module "eks-production" {
+  source          = "terraform-aws-modules/eks/aws"
+  version         = "18.4.0"
+  cluster_name    = local.k8s_cluster_name
+  cluster_version = "1.23"
+  subnet_ids      = module.vpc.private_subnets
+  vpc_id          = module.vpc.vpc_id
+  eks_managed_node_groups = {
+    spot = {
+      desired_size = local.k8s_cluster_size
+      max_size     = local.k8s_cluster_size
+      min_size     = local.k8s_cluster_size
+
+      create_launch_template = false
+      launch_template_name   = ""
+      disk_size              = 50
+      instance_types         = ["r5d.xlarge"]
+      capacity_type          = "SPOT"
+    }
+  }
+  tags = {
+    created-by = "terraform"
+  }
+}
+```
+
+**What it provisions:**
+- EKS cluster running Kubernetes 1.23
+- Managed node group using EC2 Spot instances (r5d.xlarge)
+- 50GB disk size per node
+- Nodes deployed in VPC private subnets
+
+### Cluster Bootstrap
+
+Post-cluster creation, several configurations are applied:
+
+```hcl
+resource "null_resource" "eks-bootstrap" {
+  provisioner "local-exec" {
+    command = <<EOF
+    kubectl patch configmap/aws-auth --patch "${local.aws_auth_configmap_yaml}" -n kube-system --kubeconfig <(echo $KUBECONFIG | base64 --decode);
+    kubectl set env daemonset aws-node -n kube-system ENABLE_PREFIX_DELEGATION=true --kubeconfig <(echo $KUBECONFIG | base64 --decode);
+    kubectl patch serviceaccount default -p '{"imagePullSecrets": [{"name": "docker-pull-secret"}]}' --kubeconfig <(echo $KUBECONFIG | base64 --decode);
+    kubectl patch serviceaccount default -n kube-system -p '{"imagePullSecrets": [{"name": "docker-pull-secret"}]}' --kubeconfig <(echo $KUBECONFIG | base64 --decode)
+    EOF
+  }
+}
+```
+
+**Bootstrap operations:**
+- Updates aws-auth ConfigMap for cluster access
+- Enables prefix delegation for increased pod density
+- Configures Docker image pull secrets for default service accounts
+
+### Docker Pull Secret
+
+Configures Docker Hub authentication for pulling private images:
+
+```hcl
+resource "kubernetes_secret" "docker-pull-secret" {
+  for_each = toset(["default", "kube-system"])
+  metadata {
+    name      = "docker-pull-secret"
+    namespace = each.value
+  }
+
+  data = {
+    ".dockerconfigjson" = jsonencode({
+      auths = {
+        "https://index.docker.io/v1/" = {
+          auth = base64encode("pennlabs:${var.DOCKERHUB_TOKEN}")
+        }
+      }
+    })
+  }
+
+  type = "kubernetes.io/dockerconfigjson"
+}
+```
+
+### Spot Instance Termination Handler
+
+Deploys AWS Node Termination Handler via Helm to gracefully handle spot instance terminations:
+
+```hcl
+resource "helm_release" "aws-node-termination-handler" {
+  name       = "aws-node-termination-handler"
+  repository = "https://aws.github.io/eks-charts"
+  chart      = "aws-node-termination-handler"
+  version    = "0.13.0"
+  namespace  = "kube-system"
+
+  values = [file("helm/aws-node-termination-handler.yaml")]
+}
+```
+
+## IAM Configuration
+
+### Kubectl Role
+
+Creates an IAM role for cluster access:
+
+```hcl
+resource "aws_iam_role" "kubectl" {
+  name = "kubectl"
+  assume_role_policy = data.aws_iam_policy_document.kubectl.json
+}
+
+resource "aws_iam_role_policy" "kubectl" {
+  name   = "kubectl"
+  role   = aws_iam_role.kubectl.name
+  policy = data.aws_iam_policy_document.view-k8s.json
+}
+```
+
+**Assume role principals:**
+- SRE team members
+- GitHub Actions user
+- EC2 bastion instances
+
+**Permissions:**
+- `eks:DescribeCluster` on the production cluster
+
+### Kubeconfig Secret
+
+Stores the kubeconfig in Vault for break-glass scenarios:
+
+```hcl
+resource "vault_generic_secret" "kubeconfig" {
+  path = "${module.vault.secrets-path}/breakglass/aws/kubeconfig"
+
+  data_json = jsonencode({ "kubeconfig" = templatefile("files/kubeconfig", {
+    endpoint = module.eks-production.cluster_endpoint
+    ca       = module.eks-production.cluster_certificate_authority_data
+    role     = aws_iam_role.kubectl.arn
+  }) })
+}
+```
+
+## Configuration Parameters
+
+<ParamField path="cluster_name" type="string" required>
+  Name of the EKS cluster (from `local.k8s_cluster_name`)
+</ParamField>
+
+<ParamField path="cluster_version" type="string" default="1.23">
+  Kubernetes version for the cluster
+</ParamField>
+
+<ParamField path="instance_types" type="list(string)" default="[r5d.xlarge]">
+  EC2 instance types for the managed node group
+</ParamField>
+
+<ParamField path="capacity_type" type="string" default="SPOT">
+  Use SPOT instances for cost savings
+</ParamField>
+
+<ParamField path="disk_size" type="number" default="50">
+  EBS volume size in GB for each node
+</ParamField>
+
+<ParamField path="DOCKERHUB_TOKEN" type="string" required>
+  Docker Hub authentication token (variable)
+</ParamField>
+
+## Dependencies
+
+- **VPC Module** (`vpc.tf`): Provides private/public subnets and VPC ID
+- **Vault Module** (`vault.tf`): Stores kubeconfig for emergency access
+- **IAM Users**: SRE members and GitHub Actions user for kubectl role assumption
+
+## Outputs
+
+- `cluster_endpoint`: The EKS cluster API endpoint
+- `cluster_id`: The EKS cluster identifier
+- `cluster_arn`: The EKS cluster ARN
+- `cluster_certificate_authority_data`: Base64 encoded CA certificate
+- `oidc_provider_arn`: OIDC provider ARN for IAM roles for service accounts
+- `oidc_issuer_url`: OIDC issuer URL for service account authentication

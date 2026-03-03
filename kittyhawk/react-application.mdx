@@ -1,0 +1,167 @@
+---
+title: "ReactApplication"
+description: "Deploy React and frontend applications with automatic domain and port configuration"
+---
+
+The `ReactApplication` construct simplifies deployment of React and other frontend applications to Kubernetes. It automatically configures environment variables, ingress, and service settings for serving static applications.
+
+## Constructor
+
+```typescript
+new ReactApplication(scope: Construct, appname: string, props: ReactApplicationProps)
+```
+
+## Properties
+
+<ParamField path="deployment" type="DeploymentProps" required>
+  Deployment configuration including image, replicas, environment variables, and resource limits.
+</ParamField>
+
+<ParamField path="domain" type="HostRules" required>
+  Domain configuration specifying:
+  - `host`: The domain name (e.g., `"example.com"`)
+  - `paths`: Array of URL paths to expose (e.g., `["/"]`)
+  - `isSubdomain`: Whether this is a subdomain for certificate purposes
+</ParamField>
+
+<ParamField path="port" type="number" default="80">
+  Port to expose the application on. This is used for the Kubernetes service and will be set as the `PORT` environment variable.
+</ParamField>
+
+<ParamField path="ingressProps" type="Partial<Omit<IngressProps, 'port'>>">
+  Optional ingress configuration to override default settings, such as custom annotations.
+</ParamField>
+
+<ParamField path="createServiceAccount" type="boolean" default="false">
+  Whether to create a Kubernetes service account and attach it to deployment pods. The service account name will be the release name.
+</ParamField>
+
+## Behavior
+
+The `ReactApplication` construct automatically:
+
+1. **Sets environment variables**: Injects `DOMAIN` (the host value) and `PORT` (the exposed port)
+2. **Creates ingress rules**: Configures ingress based on the provided domain and paths
+3. **Manages certificates**: Uses the `isSubdomain` flag to determine certificate generation strategy
+4. **Configures service**: Creates a Kubernetes service exposing the specified port
+
+## Usage Example
+
+### Basic React Application
+
+```typescript
+import { ReactApplication } from '@pennlabs/kittyhawk';
+
+new ReactApplication(this, 'react-frontend', {
+  deployment: {
+    image: 'pennlabs/example-frontend',
+    replicas: 2,
+  },
+  domain: { host: 'example.com', paths: ['/'] },
+});
+```
+
+### React with Custom Port
+
+```typescript
+new ReactApplication(this, 'react-app', {
+  deployment: {
+    image: 'pennlabs/frontend',
+    replicas: 3,
+    env: [
+      { name: 'API_URL', value: 'https://api.example.com' },
+    ],
+  },
+  domain: { host: 'app.example.com', paths: ['/'] },
+  port: 3000,
+});
+```
+
+### Complete Example from README
+
+Example from the Kittyhawk README:
+
+```typescript
+const frontendImage = 'pennlabs/examplefrontend';
+const domain = 'example.pennlabs.org';
+
+new ReactApplication(this, 'react', {
+  deployment: {
+    image: frontendImage,
+    replicas: 2,
+  },
+  domain: { host: domain, paths: ['/'] },
+  portEnv: '80',
+});
+```
+
+### React with Subdomain Certificate
+
+```typescript
+new ReactApplication(this, 'react', {
+  deployment: {
+    image: 'pennlabs/frontend',
+    replicas: 2,
+  },
+  domain: {
+    host: 'dashboard.example.com',
+    paths: ['/'],
+    isSubdomain: true, // Reuses parent domain's wildcard certificate
+  },
+});
+```
+
+### React with Multiple Paths
+
+```typescript
+new ReactApplication(this, 'react', {
+  deployment: {
+    image: 'pennlabs/spa',
+    replicas: 2,
+  },
+  domain: {
+    host: 'example.com',
+    paths: ['/', '/app', '/dashboard'],
+  },
+});
+```
+
+### React with Custom Ingress Annotations
+
+```typescript
+new ReactApplication(this, 'react', {
+  deployment: {
+    image: 'pennlabs/frontend',
+    replicas: 2,
+  },
+  domain: { host: 'example.com', paths: ['/'] },
+  ingressProps: {
+    annotations: {
+      'nginx.ingress.kubernetes.io/rewrite-target': '/',
+      'nginx.ingress.kubernetes.io/ssl-redirect': 'true',
+    },
+  },
+});
+```
+
+## Environment Variables
+
+The following environment variables are automatically set:
+
+- `DOMAIN`: The host value from the domain configuration
+- `PORT`: The port number (default: `"80"`)
+
+These can be used in your application's configuration, for example:
+
+```javascript
+// In your React app
+const domain = process.env.DOMAIN;
+const port = process.env.PORT;
+```
+
+## Related
+
+- [Deployments](/kittyhawk/deployments) - Configuration options for the underlying deployment
+- [Ingress](/kittyhawk/ingress) - Ingress construct for custom routing
+- [Certificates](/kittyhawk/certificates) - Certificate management for TLS
+- [DjangoApplication](/kittyhawk/django-application) - For backend applications

@@ -1,0 +1,92 @@
+---
+title: Terraform Overview
+description: Overview of Penn Labs Terraform infrastructure and configuration
+---
+
+Penn Labs uses [Terraform](https://www.terraform.io/docs/index.html) to manage infrastructure in a declarative manner. This infrastructure-as-code approach ensures consistency, version control, and reproducibility across our AWS-based production environment.
+
+## What Terraform Manages
+
+Our Terraform configuration manages the complete Penn Labs infrastructure stack:
+
+- **EKS Cluster**: Production Kubernetes cluster with node groups and autoscaling
+- **Networking**: VPC, subnets, security groups, and load balancers
+- **Database**: RDS PostgreSQL cluster with database roles and grants
+- **DNS**: Route53 hosted zones for all product domains
+- **IAM**: Roles and policies for services, GitHub Actions, and team members
+- **Vault**: HashiCorp Vault for secrets management
+- **Monitoring**: Grafana, Datadog, and observability infrastructure
+- **CI/CD**: GitHub Actions secrets and AWS credentials
+
+## Main Terraform Files
+
+### Core Infrastructure
+
+- **`main.tf`** - Defines locals for products, SRE members, cluster configuration, and domains
+- **`provider.tf`** - Configures providers (AWS, Kubernetes, Helm, PostgreSQL, Vault) and S3 backend
+- **`vpc.tf`** - Creates VPC using the [VPC Module](https://registry.terraform.io/modules/terraform-aws-modules/vpc/aws/latest)
+- **`eks.tf`** - Creates EKS cluster and installs aws-node-termination-handler
+
+### Database & Storage
+
+- **`rds.tf`** - Creates RDS PostgreSQL cluster with databases and roles for each product
+- **`db-backup.tf`** - Grants db-backup IAM role access to sql.pennlabs.org S3 bucket
+
+### Networking & DNS
+
+- **`route53.tf`** - Creates Route53 hosted zones using the [Domain Module](terraform/README.md#route53tf)
+
+### IAM & Security
+
+- **`iam.tf`** - Creates IAM roles for products that can be assumed by Service Accounts
+- **`sre.tf`** - Creates IAM users for platform members with kubectl access
+- **`gh-actions.tf`** - Creates IAM user for GitHub Actions with kubectl role access
+- **`bastion.tf`** - Configures bastion host for team leads to exec into pods
+
+### Secrets & CI/CD
+
+- **`vault.tf`** - Provisions HashiCorp Vault with TLS, KMS, and EC2 instance
+- **`github.tf`** - Creates organization-level GitHub Actions secrets
+
+### Cluster Configuration
+
+- **`production-cluster.tf`** - Uses Base Cluster Module and installs team-sync, Grafana, Bitwarden, Renovate, and db-backup
+
+## Environment Variables
+
+The following environment variables must be exported before running Terraform:
+
+| Variable | Description |
+| --- | --- |
+| `GH_PERSONAL_TOKEN` | [GitHub Personal Access Token](https://help.github.com/en/github/authenticating-to-github/creating-a-personal-access-token-for-the-command-line) for Penn Labs Admin account |
+| `GF_GH_CLIENT_ID` | Client ID for Grafana Penn Labs OAuth2 application on GitHub |
+| `GF_GH_CLIENT_SECRET` | Client Secret for Grafana Penn Labs OAuth2 application on GitHub |
+| `GF_SLACK_URL` | Slack notification URL for Grafana alerts |
+
+## Key Configuration
+
+Our Terraform setup defines several important configurations in `main.tf:1-64`:
+
+- **Products**: common-funding-application, hub-at-penn, ocwp, office-hours-queue, penn-clubs, penn-courses, platform, platform-dev, penn-mobile
+- **Cluster**: Name `production` with 5 nodes
+- **Domains**: ohq.io, pennbasics.com, penncfa.com, pennclubs.com, penncoursealert.com, penncourseplan.com, penncoursereview.com, penndegreeplan.com, penncourses.org, pennlabs.org, pennmobile.org
+- **VPC CIDR**: 10.0.0.0/16
+
+## Prerequisites
+
+Before working with Terraform:
+
+1. **Install Terraform** - [Download from terraform.io](https://www.terraform.io/downloads)
+2. **Install psql** - Required for database operations during bootstrapping
+3. **AWS Credentials** - IAM user with AdministratorAccess policy
+4. **Environment Variables** - All variables listed above must be exported
+5. **Access to Vault** - Root token for secrets management
+
+## Remote State
+
+Terraform state is stored in an S3 backend configured in `provider.tf`. This ensures:
+
+- State is shared across team members
+- State is versioned and backed up
+- State locking prevents concurrent modifications
+- Sensitive values are encrypted at rest

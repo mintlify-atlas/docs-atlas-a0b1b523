@@ -1,0 +1,51 @@
+---
+title: "Overview"
+description: "An introduction to Kittyhawk, Penn Labs' automated Kubernetes YAML generator"
+---
+
+## What is Kittyhawk?
+
+Kittyhawk is the automated Kubernetes YAML generator for Penn Labs. With Kittyhawk, you can define an application's deployment configuration in TypeScript using objects called [constructs](https://cdk8s.io/docs/latest/concepts/constructs/).
+
+Instead of manually writing and maintaining complex YAML files, Kittyhawk allows you to:
+
+- **Define infrastructure as code** using TypeScript
+- **Leverage type safety** to catch configuration errors before deployment
+- **Reuse common patterns** through custom constructs
+- **Simplify deployments** with higher-level abstractions
+
+## Why Kittyhawk?
+
+Kubernetes YAML files are notoriously verbose and error-prone. Kittyhawk solves this by:
+
+1. Providing a programmatic interface to define deployments
+2. Offering pre-built constructs for common Penn Labs use cases
+3. Automatically generating valid Kubernetes YAML from TypeScript code
+4. Integrating seamlessly with CDK8s and Penn Labs' CI/CD pipeline
+
+## Key Features
+
+- **Built on CDK8s**: Leverages the [CDK8s](https://cdk8s.io/) framework for Kubernetes configuration
+- **Custom Constructs**: Includes specialized constructs for Penn Labs applications:
+  - `ReactApplication` - Deploy React frontends
+  - `DjangoApplication` - Deploy Django backends with ASGI/WSGI support
+  - `RedisApplication` - Deploy Redis instances
+  - `CronJob` - Schedule automated tasks
+- **Type-Safe Configuration**: Full TypeScript support catches errors at compile time
+- **Automated YAML Generation**: Generates production-ready Kubernetes YAML automatically
+- **CI/CD Integration**: Works seamlessly with Penn Labs' deployment pipeline via [Kraken](https://kraken.pennlabs.org/)
+
+## Learn More
+
+For detailed API documentation and advanced usage, visit the [Kittyhawk documentation site](https://kittyhawk.pennlabs.org).
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/kittyhawk/installation">
+    Set up Kittyhawk in your project
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/kittyhawk/quickstart">
+    Deploy your first application with Kittyhawk
+  </Card>
+</CardGroup>

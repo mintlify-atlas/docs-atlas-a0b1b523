@@ -1,0 +1,201 @@
+---
+title: Base Cluster Module
+description: Provisions essential Kubernetes cluster components including monitoring, ingress, and certificate management
+---
+
+The `base_cluster` module sets up the foundational infrastructure for a Kubernetes cluster, deploying essential services like Traefik ingress controller, cert-manager for TLS certificates, Prometheus for monitoring, Datadog for observability, and Vault secret synchronization.
+
+## Overview
+
+This module provisions the following components:
+
+- **Traefik**: Ingress controller for routing external traffic
+- **Cert Manager**: Automated TLS certificate management with Let's Encrypt
+- **Prometheus**: Metrics collection and monitoring
+- **Datadog**: Application performance monitoring and observability
+- **Vault Secret Sync**: Synchronizes secrets from HashiCorp Vault to Kubernetes
+- **Redis Config**: ConfigMap for Redis configuration
+
+## Module Structure
+
+The module is organized into specialized Terraform files:
+
+- `traefik.tf`: Traefik ingress controller deployment
+- `cert-manager.tf`: Certificate management setup
+- `monitoring.tf`: Prometheus monitoring stack
+- `datadog.tf`: Datadog agent deployment
+- `vault-secret-sync.tf`: Vault secret synchronization
+- `redis.tf`: Redis configuration resources
+- `variables.tf`: Input variable definitions
+
+## Input Variables
+
+<ParamField path="traefik_values" type="list(string)" required>
+  Values to provide to the Traefik Helm chart. These configure the ingress controller settings.
+</ParamField>
+
+<ParamField path="vault_secret_sync_values" type="list(string)" required>
+  Values to provide to the Vault Secret Sync Helm chart. Configures how secrets are synced from Vault to Kubernetes.
+</ParamField>
+
+<ParamField path="prometheus_values" type="list(string)" required>
+  Values to provide to the Prometheus Helm chart. Configures monitoring and metrics collection settings.
+</ParamField>
+
+<ParamField path="cert_manager_values" type="list(string)" required>
+  Values to provide to the Cert Manager Helm chart. Configures TLS certificate management and Let's Encrypt integration.
+</ParamField>
+
+<ParamField path="datadog_values" type="list(string)" required>
+  Values to provide to the Datadog Helm chart. Configures Datadog agent for application monitoring and observability.
+</ParamField>
+
+## Resources Provisioned
+
+### Namespaces
+
+```hcl
+resource "kubernetes_namespace" "cert-manager" {
+  metadata {
+    name = "cert-manager"
+  }
+}
+
+resource "kubernetes_namespace" "monitoring" {
+  metadata {
+    name = "monitoring"
+  }
+}
+```
+
+### Traefik Ingress Controller
+
+```hcl
+resource "helm_release" "traefik" {
+  name       = "traefik"
+  repository = "https://traefik.github.io/charts"
+  chart      = "traefik"
+  version    = "21.0.0"
+  namespace  = "kube-system"
+
+  values = var.traefik_values
+}
+```
+
+### Certificate Manager
+
+```hcl
+resource "helm_release" "cert-manager" {
+  name       = "cert-manager"
+  repository = "https://charts.jetstack.io"
+  chart      = "cert-manager"
+  version    = "v1.11.0"
+  namespace  = kubernetes_namespace.cert-manager.metadata[0].name
+  atomic     = true
+  values     = var.cert_manager_values
+}
+```
+
+The module also deploys:
+- ClusterIssuer for Let's Encrypt certificate issuance
+- Wildcard certificate for Penn Labs domains
+
+### Monitoring Stack
+
+```hcl
+resource "helm_release" "prometheus" {
+  name       = "prometheus"
+  repository = "https://charts.helm.sh/stable"
+  chart      = "prometheus"
+  version    = "11.2.3"
+  namespace  = kubernetes_namespace.monitoring.metadata[0].name
+
+  values = var.prometheus_values
+}
+
+resource "helm_release" "datadog" {
+  name       = "datadog"
+  repository = "https://helm.datadoghq.com"
+  chart      = "datadog"
+  namespace  = kubernetes_namespace.monitoring.metadata[0].name
+
+  values = var.datadog_values
+}
+```
+
+### Vault Secret Sync
+
+```hcl
+resource "helm_release" "vault-secret-sync" {
+  name       = "vault-secret-sync"
+  repository = "https://helm.pennlabs.org"
+  chart      = "vault-secret-sync"
+  version    = "0.1.5"
+  values     = var.vault_secret_sync_values
+  depends_on = [
+    kubernetes_namespace.monitoring,
+    kubernetes_namespace.cert-manager,
+  ]
+}
+```
+
+### Redis Configuration
+
+```hcl
+resource "kubernetes_config_map" "redis_config_map" {
+  metadata {
+    name = "redis-config"
+  }
+
+  data = {
+    "redis-config" = <<-EOF
+    save 3600 30
+    dir /redis-master-data/
+    dbfilename dump.rdb
+    protected-mode no
+    EOF
+  }
+}
+```
+
+## Usage Example
+
+```hcl
+module "base_cluster" {
+  source = "./modules/base_cluster"
+
+  traefik_values = [
+    file("traefik-values.yaml")
+  ]
+
+  cert_manager_values = [
+    file("cert-manager-values.yaml")
+  ]
+
+  prometheus_values = [
+    file("prometheus-values.yaml")
+  ]
+
+  datadog_values = [
+    file("datadog-values.yaml")
+  ]
+
+  vault_secret_sync_values = [
+    file("vault-secret-sync-values.yaml")
+  ]
+}
+```
+
+## Dependencies
+
+This module depends on:
+- A running Kubernetes cluster
+- Helm provider configured
+- Kubernetes provider configured
+- Access to the specified Helm chart repositories
+
+## Notes
+
+- The cert-manager deployment uses `atomic = true` to ensure it's fully operational before custom resources are applied
+- A 1-minute sleep is configured after cert-manager deployment to allow proper initialization
+- The vault-secret-sync deployment depends on both the monitoring and cert-manager namespaces being created first

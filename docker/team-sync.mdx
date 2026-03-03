@@ -1,0 +1,52 @@
+---
+title: Team Sync
+description: Docker image for syncing GitHub teams to Vault policies and other services
+---
+
+[![Docker Pulls](https://img.shields.io/docker/pulls/pennlabs/team-sync)](https://hub.docker.com/r/pennlabs/team-sync)
+
+The `team-sync` image performs various syncing operations related to Penn Labs' GitHub teams, including syncing team memberships to Vault policies and other services.
+
+## Purpose
+
+This Docker image automates synchronization tasks between GitHub teams and other services used by Penn Labs. It helps maintain consistency across different platforms by keeping team memberships and permissions up to date.
+
+## Module System
+
+The `team-sync` image uses a dynamic module loading system:
+
+1. Python files in the `sync/modules` directory are automatically loaded
+2. Each module implements a `sync` method
+3. The image executes the `sync` method for each module
+
+This modular architecture makes it easy to add new synchronization tasks without modifying the core image.
+
+### How It Works
+
+```
+┌─────────────────┐
+│  team-sync      │
+│  container      │
+└────────┬────────┘
+         │
+         ├─► Load modules from sync/modules/
+         │
+         ├─► Execute each module's sync() method
+         │
+         └─► Perform sync operations
+```
+
+## Use Cases
+
+- Syncing GitHub team memberships to Vault policies
+- Updating access controls across multiple services
+- Maintaining consistent permissions across platforms
+- Automating team-based provisioning tasks
+
+## Extending with Custom Modules
+
+To add custom synchronization logic:
+
+1. Create a new Python file in `sync/modules/`
+2. Implement a `sync` method with your synchronization logic
+3. The module will be automatically loaded and executed

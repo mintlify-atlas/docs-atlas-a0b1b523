@@ -1,0 +1,571 @@
+---
+title: "Logging"
+description: "Logging infrastructure and how to access logs in Penn Labs"
+---
+
+## Overview
+
+Penn Labs uses **Datadog** for centralized logging from Kubernetes applications. Logs are automatically collected from all containers and made available for search and analysis.
+
+## Logging Architecture
+
+```
+Application Pods → Datadog Agent (DaemonSet) → Datadog Cloud → Datadog UI
+```
+
+### Datadog Agent
+
+The Datadog agent runs as a DaemonSet on every Kubernetes node, collecting logs from all containers.
+
+**Deployment** (`terraform/modules/base_cluster/datadog.tf`):
+```hcl
+resource "helm_release" "datadog" {
+  name       = "datadog"
+  repository = "https://helm.datadoghq.com"
+  chart      = "datadog"
+  namespace  = kubernetes_namespace.monitoring.metadata[0].name
+  
+  values = var.datadog_values
+}
+```
+
+**Configuration** (`terraform/helm/datadog.yaml`):
+```yaml
+datadog:
+  apiKeyExistingSecret: datadog
+  logs:
+    enabled: true
+    containerCollectAll: true
+```
+
+**Key Features:**
+- **Container Collection:** Automatically collects logs from all containers
+- **Namespace:** Deployed in `monitoring` namespace
+- **Custom Image:** Uses `pennlabs/datadog-agent` with custom configurations
+- **API Key:** Stored in `datadog` Kubernetes secret
+
+## Log Collection
+
+### Automatic Collection
+
+Datadog automatically collects logs from:
+- All application pods
+- System pods (kube-system)
+- Init containers
+- Sidecar containers
+
+No configuration is needed in application code - logs written to stdout/stderr are automatically collected.
+
+### Log Sources
+
+**Application Logs:**
+```python
+# Django
+import logging
+logger = logging.getLogger(__name__)
+logger.info("User logged in", extra={"user_id": user.id})
+```
+
+**Container Logs:**
+```bash
+# Any output to stdout/stderr is collected
+echo "Processing job..."  # Collected as log
+curl https://api.example.com  # Output collected
+```
+
+**Nginx Access Logs:**
+```
+127.0.0.1 - - [01/Jan/2024:12:00:00 +0000] "GET /api/users HTTP/1.1" 200 1234
+```
+
+### Log Metadata
+
+Datadog automatically adds metadata to logs:
+- **Pod name** - Which pod generated the log
+- **Namespace** - Kubernetes namespace
+- **Container name** - Container within the pod
+- **Node** - Which Kubernetes node
+- **Service** - Inferred from pod labels
+- **Image** - Docker image and tag
+- **Labels** - All Kubernetes pod labels
+
+## Accessing Logs
+
+### Datadog UI
+
+**Primary Method:** Use the Datadog web interface for log search and analysis.
+
+**Access:** 
+- Login to Datadog (credentials in Bitwarden)
+- Navigate to Logs section
+
+**Search Syntax:**
+```
+# By service
+service:penn-clubs-hub
+
+# By pod
+pod_name:penn-clubs-hub-django-asgi-*
+
+# By status
+status:error
+
+# By message content
+"Database connection failed"
+
+# Combined
+service:penn-clubs-hub status:error "timeout"
+```
+
+**Time Range:**
+- Use time picker to select range
+- Common ranges: 15m, 1h, 4h, 1d, 7d
+- Custom ranges available
+
+**Live Tail:**
+- Click "Live Tail" to stream logs in real-time
+- Useful for debugging active issues
+- Apply filters to narrow down logs
+
+### kubectl Logs
+
+**Quick Method:** Use kubectl for immediate log access.
+
+**View pod logs:**
+```bash
+# Current logs
+kubectl logs <pod-name>
+
+# Follow (stream) logs
+kubectl logs -f <pod-name>
+
+# Previous container logs (after crash)
+kubectl logs --previous <pod-name>
+
+# Specific container in pod
+kubectl logs <pod-name> -c <container-name>
+
+# Last N lines
+kubectl logs --tail=100 <pod-name>
+
+# Since timestamp
+kubectl logs --since=1h <pod-name>
+```
+
+**View logs by label:**
+```bash
+# All pods with label
+kubectl logs -l app=penn-clubs-hub
+
+# All pods with label, streaming
+kubectl logs -f -l app.kubernetes.io/part-of=penn-clubs-hub
+```
+
+**Limitations:**
+- Only shows recent logs (limited buffer)
+- No search or filtering (use grep)
+- Doesn't persist after pod deletion
+- No aggregation across pods
+
+## Log Best Practices
+
+### Application Logging
+
+**DO:**
+- ✓ Use structured logging (JSON format when possible)
+- ✓ Include context (user ID, request ID, etc.)
+- ✓ Use appropriate log levels (DEBUG, INFO, WARNING, ERROR)
+- ✓ Log important events (user actions, errors, performance)
+- ✓ Include timestamps (automatic in most frameworks)
+- ✓ Sanitize sensitive data (passwords, tokens, PII)
+
+**DON'T:**
+- ✗ Log sensitive information (passwords, API keys, SSNs)
+- ✗ Log too verbosely in production (debug spam)
+- ✗ Log binary data or large payloads
+- ✗ Use print() instead of logging framework
+- ✗ Ignore errors or swallow exceptions silently
+
+### Structured Logging Example
+
+**Python (Django):**
+```python
+import logging
+import json
+
+logger = logging.getLogger(__name__)
+
+# Good: Structured with context
+logger.info("User login", extra={
+    "user_id": user.id,
+    "ip_address": request.META.get('REMOTE_ADDR'),
+    "user_agent": request.META.get('HTTP_USER_AGENT'),
+})
+
+# Bad: Unstructured string
+logger.info(f"User {user.id} logged in from {ip}")
+```
+
+**JavaScript (Node.js):**
+```javascript
+const logger = require('winston');
+
+// Good: Structured with context
+logger.info('API request', {
+  method: req.method,
+  path: req.path,
+  userId: req.user.id,
+  duration: Date.now() - startTime,
+});
+
+// Bad: Unstructured string
+console.log(`${req.method} ${req.path} by user ${req.user.id}`);
+```
+
+### Log Levels
+
+Use appropriate severity levels:
+
+**DEBUG:**
+- Detailed information for diagnosing problems
+- Only in development, not production
+- Example: Variable values, function entry/exit
+
+**INFO:**
+- General informational messages
+- Normal application flow
+- Example: User logged in, job completed
+
+**WARNING:**
+- Unexpected but handled situations
+- Doesn't stop execution
+- Example: Deprecated API used, retrying failed request
+
+**ERROR:**
+- Error that affects functionality
+- May be recoverable
+- Example: Database query failed, API timeout
+
+**CRITICAL:**
+- Severe error, application may crash
+- Requires immediate attention
+- Example: Database unreachable, out of memory
+
+## Searching and Filtering
+
+### Datadog Search Queries
+
+**Basic Search:**
+```
+# Exact phrase
+"database connection failed"
+
+# Wildcard
+error:*timeout*
+
+# OR condition
+error OR warning
+
+# AND condition
+service:penn-clubs-hub AND status:error
+
+# NOT condition
+service:penn-clubs-hub -status:info
+```
+
+**Facet Filters:**
+```
+# By service
+service:penn-clubs-hub
+
+# By environment
+env:production
+
+# By HTTP status
+http.status_code:500
+
+# By log level
+level:ERROR
+
+# By source
+source:python
+```
+
+**Advanced Queries:**
+```
+# Errors in specific service
+service:penn-clubs-hub status:error
+
+# Slow requests (duration > 1s)
+service:penn-clubs-hub @duration:>1000
+
+# Specific user's activity
+service:penn-clubs-hub @user.id:12345
+
+# Database errors
+service:penn-clubs-hub "DatabaseError"
+
+# 5xx errors in last hour
+status:error http.status_code:[500 TO 599]
+```
+
+### Creating Log Views
+
+**Save common searches:**
+
+1. Create a search query
+2. Click "Save View"
+3. Name the view (e.g., "Penn Clubs Errors")
+4. Set default time range and columns
+5. Share with team if needed
+
+**Example Views:**
+- Application Errors (all services, status:error)
+- Slow Requests (duration > 2s)
+- User Login Events (contains "login")
+- Database Errors (contains "database" and status:error)
+
+## Monitoring and Alerts
+
+### Log-based Metrics
+
+Create metrics from log patterns:
+
+**Example: Error Rate**
+1. Go to Logs → Generate Metrics
+2. Filter: `status:error`
+3. Group by: `service`
+4. Metric name: `logs.error.count`
+5. Use in dashboards and alerts
+
+**Example: Slow Requests**
+1. Filter: `@duration:>2000`
+2. Metric name: `logs.slow_request.count`
+3. Alert when count > threshold
+
+### Log-based Alerts
+
+**Create alerts for log patterns:**
+
+1. **Go to Monitors → New Monitor**
+2. **Select "Logs"**
+3. **Define search query:**
+   ```
+   service:penn-clubs-hub status:error
+   ```
+4. **Set alert conditions:**
+   - Trigger when > 10 errors in 5 minutes
+5. **Configure notification:**
+   - Send to Slack channel
+   - Tag on-call engineer
+6. **Add context:**
+   - Link to runbook
+   - Include log samples
+
+**Alert Example:**
+```
+Alert: High Error Rate - Penn Clubs
+Query: service:penn-clubs-hub status:error
+Condition: > 10 errors in 5 minutes
+Notification: #alerts Slack channel
+Message: "Penn Clubs error rate is high. Check logs: {{log.sample}}"
+```
+
+## Datadog Configuration
+
+### Custom Checks
+
+Datadog can monitor custom application metrics:
+
+**Cert Manager Check** (`terraform/helm/datadog.yaml`):
+```yaml
+confd:
+  cert_manager.yaml: |-
+    ad_identifiers:
+      - cert-manager
+    init_config:
+    instances:
+      - prometheus_url: http://%%host%%:9402/metrics
+```
+
+**PostgreSQL Check:**
+```yaml
+confd:
+  postgres.yaml: |-
+    init_config:
+    instances:
+      - host: "%%env_POSTGRES_HOST%%"
+        port: 5432
+        username: datadog
+        password: "%%env_POSTGRES_PASSWORD%%"
+```
+
+### Environment Variables
+
+Datadog agent loads secrets from the `datadog` Kubernetes secret:
+
+```yaml
+agents:
+  containers:
+    agent:
+      envFrom:
+        - secretRef:
+            name: datadog
+```
+
+**Required secrets:**
+- `DD_API_KEY` - Datadog API key
+- `POSTGRES_HOST` - Database host for monitoring
+- `POSTGRES_PASSWORD` - Database password for datadog user
+
+### Custom Image
+
+Penn Labs uses a custom Datadog agent image:
+
+```yaml
+agents:
+  image:
+    repository: pennlabs/datadog-agent
+    tag: 7479c2dd283d4ecc808fc65107048658dde778a2
+    doNotCheckTag: true
+```
+
+This image includes custom integrations and configurations.
+
+## Common Use Cases
+
+### Debugging Application Errors
+
+1. **Find the error in Datadog:**
+   ```
+   service:my-app status:error
+   ```
+
+2. **Check recent logs** for context (before/after error)
+
+3. **Look for patterns:**
+   - Is it happening repeatedly?
+   - Same user/endpoint?
+   - Correlated with deployment?
+
+4. **Check stack trace** in log details
+
+5. **Reproduce locally** if possible
+
+### Investigating Slow Requests
+
+1. **Search for slow requests:**
+   ```
+   service:my-app @duration:>2000
+   ```
+
+2. **Group by endpoint** to find bottlenecks
+
+3. **Check for:**
+   - Slow database queries
+   - External API timeouts
+   - Large data processing
+
+4. **Correlate with metrics:**
+   - CPU/memory usage
+   - Database load
+   - Traffic patterns
+
+### Tracking User Activity
+
+1. **Search by user ID:**
+   ```
+   service:my-app @user.id:12345
+   ```
+
+2. **Sort by timestamp** to see activity timeline
+
+3. **Filter by log level** to focus on errors or info
+
+4. **Export logs** if needed for investigation
+
+### Monitoring Deployments
+
+1. **Filter by recent time** (last 15 minutes)
+
+2. **Watch for errors** during deployment:
+   ```
+   service:my-app status:error
+   ```
+
+3. **Check for new error patterns** not seen before
+
+4. **Compare error rate** before/after deployment
+
+5. **Rollback if needed** (see [Rollback Procedures](/operations/rollbacks))
+
+## Troubleshooting
+
+### Logs Not Appearing in Datadog
+
+**Symptom:** Application logs not visible in Datadog
+
+**Solutions:**
+1. Check Datadog agent is running:
+   ```bash
+   kubectl get pods -n monitoring -l app=datadog
+   ```
+
+2. Check agent logs for errors:
+   ```bash
+   kubectl logs -n monitoring -l app=datadog | grep ERROR
+   ```
+
+3. Verify API key is correct:
+   ```bash
+   kubectl get secret datadog -n monitoring -o jsonpath='{.data.DD_API_KEY}' | base64 -d
+   ```
+
+4. Check container logs are being written to stdout/stderr:
+   ```bash
+   kubectl logs <pod-name>
+   ```
+
+5. Ensure `containerCollectAll: true` in Datadog config
+
+### Missing Log Context
+
+**Symptom:** Logs lack expected fields (user ID, request ID, etc.)
+
+**Solutions:**
+1. Verify application is using structured logging
+2. Check logging configuration in application
+3. Ensure extra fields are passed to logger:
+   ```python
+   logger.info("Message", extra={"user_id": 123})
+   ```
+4. Update logging format to include context
+
+### High Log Volume
+
+**Symptom:** Too many logs, hard to find relevant information
+
+**Solutions:**
+1. Reduce debug logging in production
+2. Filter out health check logs
+3. Sample high-volume logs (log every Nth request)
+4. Use log level filtering
+5. Create indexes for important logs only
+
+### Logs Cut Off
+
+**Symptom:** Log messages are truncated
+
+**Solutions:**
+1. Datadog has a max log size (256 KB by default)
+2. Split large logs into multiple entries
+3. Log summaries instead of full payloads
+4. Store large data elsewhere, log reference ID
+
+## Additional Resources
+
+- [Datadog Documentation](https://docs.datadoghq.com/)
+- [Datadog Log Search Syntax](https://docs.datadoghq.com/logs/explorer/search_syntax/)
+- [Grafana Dashboards](/operations/grafana-dashboards)
+- [Alerting Guide](/operations/alerting)
+- [Deployment Guide](/operations/deployment-guide)

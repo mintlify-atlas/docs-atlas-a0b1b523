@@ -1,0 +1,215 @@
+---
+title: "RedisApplication"
+description: "Deploy Redis instances with optional persistence and custom configuration"
+---
+
+The `RedisApplication` construct deploys Redis instances to Kubernetes with support for data persistence, custom configuration, and automatic volume management.
+
+## Constructor
+
+```typescript
+new RedisApplication(scope: Construct, appname: string, props: RedisApplicationProps)
+```
+
+## Properties
+
+<ParamField path="deployment" type="Partial<DeploymentProps>">
+  Deployment configuration. Defaults are:
+  - `image`: `"redis"`
+  - `tag`: `"6.0"`
+  - `port`: `6379`
+</ParamField>
+
+<ParamField path="port" type="number" default="6379">
+  Port to expose Redis on. Standard Redis port is 6379.
+</ParamField>
+
+<ParamField path="createServiceAccount" type="boolean" default="false">
+  Whether to create a Kubernetes service account and attach it to deployment pods.
+</ParamField>
+
+<ParamField path="persistData" type="boolean" default="false">
+  Enable data persistence using a PersistentVolumeClaim. When enabled:
+  - Creates an AWS EBS-backed storage class (gp3)
+  - Creates a 1Gi PersistentVolumeClaim with ReadWriteOnce access
+  - Mounts volumes at `/redis-master-data` (data) and `/redis-master` (config)
+  - Runs Redis with custom config: `redis-server /redis-master/redis.conf`
+</ParamField>
+
+<ParamField path="redisConfigMap" type="object">
+  Override the default Redis configuration by providing a custom ConfigMap.
+  
+  **Properties:**
+  - `name` (string): Name for the ConfigMap
+  - `config` (string): Redis configuration content
+  
+  The config will be mounted as `/redis-master/redis.conf`.
+</ParamField>
+
+## Behavior
+
+### Default Configuration
+
+By default, `RedisApplication` creates a basic Redis instance without persistence:
+
+- Uses `redis:6.0` image
+- Exposes port 6379
+- No data persistence (data lost on pod restart)
+
+### With Persistence
+
+When `persistData: true`:
+
+1. **StorageClass**: Creates `{releaseName}-{appname}-storage` using AWS EBS CSI driver (gp3)
+2. **PersistentVolumeClaim**: Creates `{releaseName}-{appname}-pvc` with 1Gi storage
+3. **Volumes**: Mounts data and config volumes
+4. **Command**: Runs `redis-server /redis-master/redis.conf`
+
+### Custom Configuration
+
+When `redisConfigMap` is provided, a ConfigMap is created with your Redis configuration, which is mounted into the Redis container.
+
+## Usage Examples
+
+### Basic Redis (No Persistence)
+
+Example from the Kittyhawk README:
+
+```typescript
+import { RedisApplication } from '@pennlabs/kittyhawk';
+
+new RedisApplication(this, 'redis', {});
+```
+
+This creates a basic Redis instance accessible at `redis:6379` within the cluster.
+
+### Redis with Persistence
+
+```typescript
+new RedisApplication(this, 'redis-persistent', {
+  persistData: true,
+});
+```
+
+### Redis with Custom Version
+
+```typescript
+new RedisApplication(this, 'redis', {
+  deployment: {
+    image: 'redis',
+    tag: '7.0',
+  },
+});
+```
+
+### Redis with Custom Port
+
+```typescript
+new RedisApplication(this, 'redis-custom', {
+  port: 6380,
+  deployment: {
+    env: [
+      { name: 'REDIS_PORT', value: '6380' },
+    ],
+  },
+});
+```
+
+### Redis with Persistence and Custom Config
+
+```typescript
+new RedisApplication(this, 'redis-advanced', {
+  persistData: true,
+  redisConfigMap: {
+    name: 'custom-redis-config',
+    config: `
+      maxmemory 256mb
+      maxmemory-policy allkeys-lru
+      appendonly yes
+      appendfsync everysec
+      dir /redis-master-data
+    `,
+  },
+});
+```
+
+### Redis with Custom Resources
+
+```typescript
+new RedisApplication(this, 'redis', {
+  deployment: {
+    image: 'redis',
+    tag: '6.0',
+    resources: {
+      requests: {
+        memory: '512Mi',
+        cpu: '250m',
+      },
+      limits: {
+        memory: '1Gi',
+        cpu: '500m',
+      },
+    },
+  },
+  persistData: true,
+});
+```
+
+## Connecting to Redis
+
+From your application, connect to Redis using the service name:
+
+```python
+# Django settings.py
+REDIS_HOST = os.environ.get('REDIS_HOST', 'redis')
+REDIS_PORT = 6379
+
+CACHES = {
+    'default': {
+        'BACKEND': 'django_redis.cache.RedisCache',
+        'LOCATION': f'redis://{REDIS_HOST}:{REDIS_PORT}/0',
+    }
+}
+```
+
+```typescript
+// Node.js
+import Redis from 'ioredis';
+
+const redis = new Redis({
+  host: process.env.REDIS_HOST || 'redis',
+  port: 6379,
+});
+```
+
+## Storage Details
+
+When persistence is enabled:
+
+- **Storage Class**: `ebs.csi.aws.com` provisioner (AWS EBS)
+- **Volume Type**: gp3 (General Purpose SSD)
+- **Size**: 1Gi (modifiable by extending the construct)
+- **Access Mode**: ReadWriteOnce (required for AWS EBS)
+- **Binding Mode**: WaitForFirstConsumer (ensures volume is created in the same zone as the pod)
+
+## Volume Mounts
+
+With `persistData: true`:
+
+```typescript
+volumeMounts: [
+  {
+    name: 'data',
+    mountPath: '/redis-master-data', // Redis data directory
+  },
+  {
+    name: 'config',
+    mountPath: '/redis-master', // Redis config directory
+  },
+]
+```
+
+## Related
+
+- [Deployments](/kittyhawk/deployments) - Configuration options for the underlying deployment
+- [DjangoApplication](/kittyhawk/django-application) - Often used with Redis for caching

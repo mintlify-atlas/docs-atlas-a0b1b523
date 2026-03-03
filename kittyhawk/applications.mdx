@@ -1,0 +1,230 @@
+---
+title: 'Applications'
+description: 'Base application constructs for deploying services in Kittyhawk'
+---
+
+## Overview
+
+Applications are high-level constructs that bundle together Deployments, Services, Ingresses, and Certificates for complete service deployments. Kittyhawk provides base and specialized application classes for different frameworks.
+
+## Application Classes
+
+### Base Application
+
+The foundational `Application` class that creates a complete service deployment.
+
+```typescript
+export class Application extends Construct {
+  constructor(scope: Construct, appname: string, props: ApplicationProps)
+}
+```
+
+#### ApplicationProps
+
+<ParamField path="deployment" type="DeploymentProps" required>
+  Deployment configuration including image, replicas, and container settings
+</ParamField>
+
+<ParamField path="port" type="number" default="80">
+  Port to expose the application on
+</ParamField>
+
+<ParamField path="ingress" type="Omit<IngressProps, 'port'>">
+  Ingress configuration for external access. If provided, also creates TLS certificates.
+</ParamField>
+
+<ParamField path="createServiceAccount" type="boolean" default="false">
+  Creates a service account and attaches it to deployment pods. Service account name is set to the release name.
+</ParamField>
+
+### DjangoApplication
+
+Specialized application class for Django backends with automatic environment variable configuration.
+
+```typescript
+export class DjangoApplication extends Application {
+  constructor(scope: Construct, appname: string, props: DjangoApplicationProps)
+}
+```
+
+#### DjangoApplicationProps
+
+<ParamField path="deployment" type="DeploymentProps" required>
+  Deployment configuration
+</ParamField>
+
+<ParamField path="djangoSettingsModule" type="string" required>
+  Value for the `DJANGO_SETTINGS_MODULE` environment variable
+</ParamField>
+
+<ParamField path="port" type="number" default="80">
+  Port to expose the application on
+</ParamField>
+
+<ParamField path="domains" type="NonEmptyArray<HostRules>">
+  Array of domain configurations. Optional if the application is not publicly accessible (e.g., Celery workers).
+  
+  Each HostRules object contains:
+  - `host`: Domain name
+  - `paths`: Array of URL paths to expose
+  - `isSubdomain`: Whether to treat as subdomain for certificate purposes
+</ParamField>
+
+<ParamField path="ingressProps" type="Partial<Omit<IngressProps, 'port'>>">
+  Optional overrides for ingress configuration
+</ParamField>
+
+<ParamField path="createServiceAccount" type="boolean" default="false">
+  Creates a service account with name set to release name
+</ParamField>
+
+#### Automatic Environment Variables
+
+DjangoApplication automatically injects:
+- `DJANGO_SETTINGS_MODULE`: From props
+- `DOMAINS`: Comma-separated list of all domain hosts (if domains provided)
+
+### ReactApplication
+
+Specialized application class for React frontends.
+
+```typescript
+export class ReactApplication extends Application {
+  constructor(scope: Construct, appname: string, props: ReactApplicationProps)
+}
+```
+
+#### ReactApplicationProps
+
+<ParamField path="deployment" type="DeploymentProps" required>
+  Deployment configuration
+</ParamField>
+
+<ParamField path="domain" type="HostRules" required>
+  Single domain configuration with host, paths, and subdomain settings
+</ParamField>
+
+<ParamField path="port" type="number" default="80">
+  Port to expose the application on
+</ParamField>
+
+<ParamField path="ingressProps" type="Partial<Omit<IngressProps, 'port'>>">
+  Optional ingress overrides
+</ParamField>
+
+<ParamField path="createServiceAccount" type="boolean" default="false">
+  Creates a service account
+</ParamField>
+
+#### Automatic Environment Variables
+
+ReactApplication automatically injects:
+- `DOMAIN`: The host from domain configuration
+- `PORT`: The port number (or "80")
+
+## Usage Examples
+
+### Base Application
+
+```typescript
+import { Application } from './application';
+
+new Application(chart, 'api', {
+  deployment: {
+    image: 'pennlabs/api',
+    replicas: 3,
+    secret: 'api-secrets'
+  },
+  port: 8000,
+  ingress: {
+    rules: [{
+      host: 'api.pennlabs.org',
+      paths: ['/'],
+      isSubdomain: true
+    }]
+  },
+  createServiceAccount: true
+});
+```
+
+### Django Application
+
+```typescript
+import { DjangoApplication } from './application';
+
+new DjangoApplication(chart, 'backend', {
+  deployment: {
+    image: 'pennlabs/backend',
+    replicas: 2,
+    secret: 'backend-secrets',
+    cmd: ['gunicorn', 'app.wsgi:application']
+  },
+  djangoSettingsModule: 'app.settings.production',
+  port: 8000,
+  domains: [
+    {
+      host: 'backend.pennlabs.org',
+      paths: ['/api', '/admin'],
+      isSubdomain: true
+    }
+  ]
+});
+```
+
+### React Application
+
+```typescript
+import { ReactApplication } from './application';
+
+new ReactApplication(chart, 'frontend', {
+  deployment: {
+    image: 'pennlabs/frontend',
+    replicas: 2
+  },
+  domain: {
+    host: 'pennlabs.org',
+    paths: ['/'],
+    isSubdomain: false
+  },
+  port: 80
+});
+```
+
+### Celery Worker (No Ingress)
+
+```typescript
+import { DjangoApplication } from './application';
+
+new DjangoApplication(chart, 'celery', {
+  deployment: {
+    image: 'pennlabs/backend',
+    replicas: 1,
+    secret: 'backend-secrets',
+    cmd: ['celery', '-A', 'app', 'worker']
+  },
+  djangoSettingsModule: 'app.settings.production'
+  // No domains - internal service only
+});
+```
+
+## What Gets Created
+
+When you create an Application, Kittyhawk automatically creates:
+
+1. **Service**: Kubernetes service for internal networking
+2. **Deployment**: Pod deployment with specified replicas
+3. **ServiceAccount** (optional): If `createServiceAccount` is true
+4. **Ingress** (optional): If ingress configuration provided
+5. **Certificate** (optional): TLS certificates for each unique domain
+
+## Naming Convention
+
+All created resources are prefixed with `${RELEASE_NAME}-${appname}` where:
+- `RELEASE_NAME`: Environment variable (defaults to "undefined_release")
+- `appname`: The name passed to the constructor
+
+## Source References
+
+- Base Application: `src/application/base.ts:32`
+- DjangoApplication: `src/application/django.ts:47`
+- ReactApplication: `src/application/react.ts:38`

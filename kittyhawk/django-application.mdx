@@ -1,0 +1,138 @@
+---
+title: "DjangoApplication"
+description: "Deploy Django applications with automated configuration for domains, ingress, and environment variables"
+---
+
+The `DjangoApplication` construct simplifies deployment of Django applications to Kubernetes. It automatically configures the deployment, service, ingress, and environment variables needed to run a Django application.
+
+## Constructor
+
+```typescript
+new DjangoApplication(scope: Construct, appname: string, props: DjangoApplicationProps)
+```
+
+## Properties
+
+<ParamField path="deployment" type="DeploymentProps" required>
+  Deployment configuration including image, replicas, environment variables, and resource limits.
+</ParamField>
+
+<ParamField path="djangoSettingsModule" type="string" required>
+  The value for the `DJANGO_SETTINGS_MODULE` environment variable. This specifies which settings file Django should use (e.g., `"myapp.settings.production"`).
+</ParamField>
+
+<ParamField path="port" type="number" default="80">
+  Port to expose the application on. This is used for the Kubernetes service and ingress configuration.
+</ParamField>
+
+<ParamField path="domains" type="NonEmptyArray<HostRules>">
+  Array of domain configurations. Each entry specifies:
+  - `host`: The domain name (e.g., `"api.example.com"`)
+  - `paths`: Array of URL paths to expose (e.g., `["/api", "/admin"]`)
+  - `isSubdomain`: Whether this is a subdomain for certificate purposes
+  
+  Optional if the application is not publicly accessible (e.g., Celery workers).
+</ParamField>
+
+<ParamField path="ingressProps" type="Partial<Omit<IngressProps, 'port'>>">
+  Optional ingress configuration to override default settings, such as custom annotations for path-based routing.
+</ParamField>
+
+<ParamField path="createServiceAccount" type="boolean" default="false">
+  Whether to create a Kubernetes service account and attach it to deployment pods. The service account name will be the release name.
+</ParamField>
+
+## Behavior
+
+The `DjangoApplication` construct automatically:
+
+1. **Sets environment variables**: Injects `DJANGO_SETTINGS_MODULE` and `DOMAINS` (comma-separated list of hosts)
+2. **Creates ingress rules**: Configures ingress based on the provided domains and paths
+3. **Manages certificates**: Uses the `isSubdomain` flag to determine certificate generation strategy
+4. **Configures service**: Creates a Kubernetes service exposing the specified port
+
+## Usage Example
+
+### Basic Django Application
+
+```typescript
+import { DjangoApplication } from '@pennlabs/kittyhawk';
+
+new DjangoApplication(this, 'django-api', {
+  deployment: {
+    image: 'pennlabs/example-backend',
+    replicas: 2,
+    secret: 'example-secret',
+    env: [
+      { name: 'DEBUG', value: 'false' },
+      { name: 'DATABASE_URL', value: 'postgresql://...' },
+    ],
+  },
+  djangoSettingsModule: 'example.settings.production',
+  domains: [
+    { host: 'api.example.com', paths: ['/api'] },
+  ],
+});
+```
+
+### Django with Multiple Domains
+
+```typescript
+new DjangoApplication(this, 'django-multi', {
+  deployment: {
+    image: 'pennlabs/backend',
+    replicas: 3,
+    secret: 'backend-secret',
+  },
+  djangoSettingsModule: 'myapp.settings.production',
+  domains: [
+    { host: 'api.example.com', paths: ['/api', '/admin'] },
+    { host: 'webhook.example.com', paths: ['/'] },
+  ],
+  port: 8000,
+});
+```
+
+### Django ASGI (WebSockets)
+
+Example from the Kittyhawk README:
+
+```typescript
+new DjangoApplication(this, 'django-asgi', {
+  deployment: {
+    image: backendImage,
+    cmd: ['/usr/local/bin/asgi-run'],
+    replicas: 2,
+    secret: secret,
+    env: [
+      { name: 'REDIS_HOST', value: 'redis' },
+    ],
+  },
+  djangoSettingsModule: 'example.settings.production',
+  domains: [{ host: domain, paths: ['/api/ws'] }],
+});
+```
+
+### Django Without Public Access (Celery Worker)
+
+```typescript
+new DjangoApplication(this, 'celery-worker', {
+  deployment: {
+    image: 'pennlabs/backend',
+    cmd: ['celery', '-A', 'myapp', 'worker'],
+    replicas: 1,
+    secret: 'backend-secret',
+    env: [
+      { name: 'REDIS_HOST', value: 'redis' },
+    ],
+  },
+  djangoSettingsModule: 'myapp.settings.production',
+  // No domains - not publicly accessible
+});
+```
+
+## Related
+
+- [Deployments](/kittyhawk/deployments) - Configuration options for the underlying deployment
+- [Ingress](/kittyhawk/ingress) - Ingress construct for custom routing
+- [Certificates](/kittyhawk/certificates) - Certificate management for TLS

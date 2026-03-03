@@ -1,0 +1,60 @@
+---
+title: Installation
+description: Set up Kraken in your project with cdkactions and start defining CI/CD workflows
+---
+
+# Installation
+
+This guide will walk you through setting up Kraken in your project.
+
+## Prerequisites
+
+Before installing Kraken, you need to have cdkactions initialized in your project.
+
+### Initialize cdkactions
+
+Follow the [cdkactions getting started guide](https://github.com/ArmaanT/cdkactions/blob/master/docs/getting-started/typescript.md) to initialize the cdkactions project. This will create a `.github/cdk` directory in your repository where you'll define your workflows.
+
+## Install Kraken
+
+Once cdkactions is set up, install Kraken as a dependency:
+
+<CodeGroup>
+```bash npm
+npm install @pennlabs/kraken
+```
+
+```bash yarn
+yarn add @pennlabs/kraken
+```
+
+```bash pnpm
+pnpm add @pennlabs/kraken
+```
+</CodeGroup>
+
+## Build and Commit
+
+After configuring your Kraken stacks (see [Quickstart](/kraken/quickstart)), you need to build the workflows:
+
+1. Navigate to the cdkactions directory:
+   ```bash
+   cd .github/cdk
+   ```
+
+2. Build the workflows:
+   ```bash
+   yarn build
+   ```
+
+3. Commit the generated workflow files:
+   ```bash
+   git add .
+   git commit -m "Add Kraken CI/CD workflows"
+   ```
+
+The build process will generate YAML workflow files in `.github/workflows` that GitHub Actions can execute.
+
+## Next Steps
+
+Now that Kraken is installed, head over to the [Quickstart guide](/kraken/quickstart) to create your first workflow.

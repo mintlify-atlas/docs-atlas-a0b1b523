@@ -1,0 +1,261 @@
+---
+title: "RDS Database Setup"
+description: "PostgreSQL RDS instance configuration with security groups, parameter groups, and database/role management"
+---
+
+## Overview
+
+The RDS configuration provisions a PostgreSQL database instance with custom parameter groups, automated role and database creation, and readonly access grants.
+
+## Core Resources
+
+### Security Group
+
+Configures network access to the RDS instance:
+
+```hcl
+resource "aws_security_group" "rds" {
+  name   = "rds"
+  vpc_id = module.vpc.vpc_id
+
+  ingress {
+    from_port = 5432
+    to_port   = 5432
+    protocol  = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name       = "Production DB",
+    created-by = "terraform"
+  }
+}
+```
+
+**Note:** The security group allows access from `0.0.0.0/0` to avoid requiring Terraform to run within the EKS cluster. Consider restricting this for enhanced security.
+
+### Subnet Group
+
+Defines which subnets the RDS instance can be placed in:
+
+```hcl
+resource "aws_db_subnet_group" "rds" {
+  name       = "public-subnets"
+  subnet_ids = module.vpc.public_subnets
+
+  tags = {
+    Name       = "RDS subnet group",
+    created-by = "terraform"
+  }
+}
+```
+
+### RDS Instance
+
+The production PostgreSQL database:
+
+```hcl
+resource "aws_db_instance" "production" {
+  identifier                          = "production"
+  instance_class                      = "db.t3.xlarge"
+  engine                              = "postgres"
+  engine_version                      = "15.4"
+  parameter_group_name                = aws_db_parameter_group.timeouts.name
+  availability_zone                   = "us-east-1a"
+  allocated_storage                   = 20
+  max_allocated_storage               = 200
+  username                            = "postgres"
+  password                            = var.RDS_PASSWORD
+  iam_database_authentication_enabled = true
+  db_subnet_group_name                = aws_db_subnet_group.rds.name
+  vpc_security_group_ids              = [aws_security_group.rds.id]
+  publicly_accessible                 = true
+
+  tags = {
+    Name       = "Production",
+    created-by = "terraform"
+  }
+}
+```
+
+**What it provisions:**
+- PostgreSQL 15.4 engine
+- db.t3.xlarge instance class
+- 20GB initial storage, auto-scaling up to 200GB
+- IAM database authentication enabled
+- Publicly accessible for external connections
+- Located in us-east-1a availability zone
+
+### Parameter Group
+
+Custom timeout and SSL settings:
+
+```hcl
+resource "aws_db_parameter_group" "timeouts" {
+  name        = "rds-pg"
+  family      = "postgres15"
+  description = "Custom Timeout RDS parameter group for Postgres 15"
+
+  parameter {
+    name  = "idle_in_transaction_session_timeout"
+    value = "30000"
+  }
+
+  parameter {
+    name  = "deadlock_timeout"
+    value = "20000"
+  }
+
+  parameter {
+    name  = "statement_timeout"
+    value = "30000000"
+  }
+
+  parameter {
+    name  = "rds.force_ssl"
+    value = "0"
+  }
+}
+```
+
+**Parameter explanations:**
+- `idle_in_transaction_session_timeout`: 30 seconds (30000ms)
+- `deadlock_timeout`: 20 seconds (20000ms)
+- `statement_timeout`: 30000 seconds (30000000ms)
+- `rds.force_ssl`: Disabled (0) for Datadog compatibility
+
+## Database and Role Management
+
+### Random Passwords
+
+Generates secure passwords for all database users:
+
+```hcl
+resource "random_password" "postgres-password" {
+  for_each = setunion(local.database_users, local.readonly_users)
+  length   = 64
+  special  = false
+}
+```
+
+### Database Creation
+
+Creates a database for each application:
+
+```hcl
+resource "postgresql_database" "db" {
+  for_each = local.database_users
+  name     = each.key
+  owner    = postgresql_role.role[each.key].name
+}
+```
+
+### Role Creation
+
+**Standard roles** with full database access:
+
+```hcl
+resource "postgresql_role" "role" {
+  for_each = local.database_users
+  name     = each.key
+  login    = true
+  password = random_password.postgres-password[each.key].result
+}
+```
+
+**Readonly roles** for backups and monitoring:
+
+```hcl
+resource "postgresql_role" "readonly_role" {
+  for_each = local.readonly_users
+  name     = each.key
+  password = random_password.postgres-password[each.key].result
+  login    = true
+}
+```
+
+### Readonly Grants
+
+**Table access:**
+
+```hcl
+resource "postgresql_grant" "readonly_tables" {
+  for_each    = { for config in local.readonly_config : "${config.db}-${config.user}" => config }
+  role        = each.value.user
+  database    = postgresql_database.db[each.value.db].name
+  object_type = "table"
+  schema      = "public"
+  privileges  = ["SELECT"]
+}
+```
+
+**Sequence access:**
+
+```hcl
+resource "postgresql_grant" "readonly_sequence" {
+  for_each    = { for config in local.readonly_config : "${config.db}-${config.user}" => config }
+  role        = each.value.user
+  database    = postgresql_database.db[each.value.db].name
+  object_type = "sequence"
+  schema      = "public"
+  privileges  = ["SELECT"]
+}
+```
+
+### Default Privileges
+
+Ensures database owners have full access to their tables:
+
+```hcl
+resource "postgresql_default_privileges" "privileges" {
+  for_each    = local.database_users
+  database    = postgresql_database.db[each.key].name
+  role        = postgresql_role.role[each.key].name
+  owner       = postgresql_role.role[each.key].name
+  schema      = "public"
+  object_type = "table"
+  privileges  = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"]
+}
+```
+
+## Configuration Parameters
+
+<ParamField path="instance_class" type="string" default="db.t3.xlarge">
+  RDS instance class determining compute and memory capacity
+</ParamField>
+
+<ParamField path="engine_version" type="string" default="15.4">
+  PostgreSQL engine version
+</ParamField>
+
+<ParamField path="allocated_storage" type="number" default="20">
+  Initial storage allocation in GB
+</ParamField>
+
+<ParamField path="max_allocated_storage" type="number" default="200">
+  Maximum storage for auto-scaling in GB
+</ParamField>
+
+<ParamField path="RDS_PASSWORD" type="string" required>
+  Master password for the postgres superuser (variable)
+</ParamField>
+
+<ParamField path="publicly_accessible" type="bool" default="true">
+  Whether the database is accessible from the public internet
+</ParamField>
+
+<ParamField path="iam_database_authentication_enabled" type="bool" default="true">
+  Enable IAM-based database authentication
+</ParamField>
+
+## Dependencies
+
+- **VPC Module** (`vpc.tf`): Provides public subnets for RDS placement
+- **Vault Module** (`vault.tf`): Stores database connection strings securely
+- **Local Variables**: `local.database_users`, `local.readonly_users`, `local.readonly_config`
+
+## Outputs
+
+- `endpoint`: The RDS instance connection endpoint
+- `arn`: The RDS instance ARN
+- Database credentials stored in Vault at `secrets/production/default/{database-name}`

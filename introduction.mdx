@@ -1,0 +1,101 @@
+---
+title: Introduction
+description: Welcome to Penn Labs Infrastructure - the complete infrastructure as code repository for managing Penn Labs' cloud resources and deployment pipelines.
+---
+
+# Penn Labs Infrastructure
+
+Welcome to the Penn Labs Infrastructure documentation. This repository contains all the configurations and tools needed to manage Penn Labs' cloud infrastructure on AWS, including Kubernetes clusters, databases, networking, and deployment automation.
+
+## What's Inside
+
+This repository provides a complete infrastructure-as-code solution for Penn Labs, encompassing:
+
+- **Terraform configurations** for AWS infrastructure provisioning (EKS, RDS, VPC, Vault, IAM)
+- **Kittyhawk** - automated Kubernetes YAML generator built on CDK8s
+- **Kraken** - GitHub Actions workflow automation using CDK
+- **Docker images** - custom maintained images for infrastructure services
+- **Monitoring & Operations** - Grafana dashboards and operational tooling
+
+<CardGroup cols={2}>
+  <Card title="Terraform" icon="cube" href="/terraform/overview">
+    Declarative infrastructure management for AWS resources including EKS clusters, RDS databases, and networking
+  </Card>
+  
+  <Card title="Kittyhawk" icon="rocket" href="/kittyhawk/overview">
+    TypeScript-based Kubernetes YAML generator that simplifies deployment configuration with custom constructs
+  </Card>
+  
+  <Card title="Kraken" icon="github" href="/kraken/overview">
+    Automated GitHub Actions workflows for CI/CD pipelines, built using CDK for Actions
+  </Card>
+  
+  <Card title="Docker" icon="docker" href="/docker/overview">
+    Custom Docker images for infrastructure services including Django base, database backups, and team sync
+  </Card>
+</CardGroup>
+
+## Key Features
+
+### Infrastructure as Code
+All infrastructure is defined declaratively using Terraform, enabling version control, peer review, and reproducible deployments. The infrastructure includes:
+
+- **EKS Kubernetes Cluster** - Production-grade container orchestration
+- **RDS PostgreSQL** - Managed database with automated backups
+- **AWS VPC** - Isolated network infrastructure
+- **HashiCorp Vault** - Secrets management and access control
+- **Route53** - DNS management for all product domains
+
+### Deployment Automation
+The deployment pipeline is fully automated through a series of integrated tools:
+
+1. **Code changes** trigger GitHub Actions workflows (managed by Kraken)
+2. **Kittyhawk** generates Kubernetes YAML from TypeScript definitions
+3. **Docker images** are built, tagged, and pushed to Docker Hub
+4. **Kubernetes** applies the generated manifests to deploy applications
+
+<Note>
+  The infrastructure repository uses a remote S3 backend for Terraform state, ensuring state is shared across the team and protected from local machine failures.
+</Note>
+
+### Security & Access Control
+
+- **IAM roles** scoped per service account for least-privilege access
+- **Vault integration** for secrets management and rotation
+- **Team sync** automatically grants access based on GitHub team membership
+- **Bastion host** for secure cluster access by team leads
+
+### Monitoring & Observability
+
+- **Grafana dashboards** for infrastructure and application metrics
+- **Database backups** to S3 with automated daily snapshots
+- **AWS node termination handler** for graceful spot instance handling
+
+<Info>
+  This infrastructure supports all Penn Labs products, providing a standardized platform for deploying Django backends, React frontends, and supporting services like Redis.
+</Info>
+
+## Getting Started
+
+Explore the documentation sections to learn more about each component:
+
+- **[Architecture Overview](/architecture)** - Understanding how all the pieces fit together
+- **[Terraform](/terraform/overview)** - Managing AWS infrastructure
+- **[Kittyhawk](/kittyhawk/overview)** - Creating Kubernetes deployments
+- **[Kraken](/kraken/overview)** - Configuring CI/CD pipelines
+- **[Operations](/operations/secrets)** - Managing secrets and access control
+
+## Repository Structure
+
+```
+infrastructure/
+├── terraform/          # AWS infrastructure definitions
+│   ├── modules/       # Reusable Terraform modules
+│   └── *.tf           # Resource configurations
+├── cdk/               # CDK abstractions
+│   ├── kittyhawk/    # Kubernetes YAML generator
+│   └── kraken/       # GitHub Actions workflows
+├── docker/            # Custom Docker images
+├── grafana-dashboards/  # Monitoring dashboards
+└── docs/             # Documentation and guides
+```

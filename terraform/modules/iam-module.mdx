@@ -1,0 +1,174 @@
+---
+title: IAM Module
+description: Creates AWS IAM roles for Kubernetes service accounts using OIDC federation
+---
+
+The `iam` module creates AWS IAM roles that can be assumed by Kubernetes service accounts through OIDC (OpenID Connect) federation. This enables Kubernetes pods to securely access AWS resources without managing long-lived credentials.
+
+## Overview
+
+This module:
+
+- Creates an IAM role that trusts your Kubernetes cluster's OIDC provider
+- Configures the trust policy to allow specific Kubernetes service accounts to assume the role
+- Supports multiple namespaces for the same service account name
+- Uses OIDC web identity federation for secure, short-lived credentials
+
+## Input Variables
+
+<ParamField path="role" type="string" required>
+  Name of the Kubernetes service account and the generated IAM role. The same name will be used for both the Kubernetes service account and the AWS IAM role.
+</ParamField>
+
+<ParamField path="namespaces" type="set(string)" default='["default"]'>
+  Set of Kubernetes namespace(s) where the service account exists. The IAM role will trust service accounts with the specified name in all listed namespaces.
+</ParamField>
+
+<ParamField path="oidc_issuer_url" type="string" required>
+  URL of the Kubernetes OIDC issuer. This is typically the cluster's OIDC provider URL (e.g., `https://oidc.eks.us-east-1.amazonaws.com/id/EXAMPLE`).
+</ParamField>
+
+<ParamField path="oidc_provider_arn" type="string" required>
+  ARN of the Kubernetes OIDC provider in AWS IAM. This is the federated identity provider that enables the trust relationship.
+</ParamField>
+
+## Outputs
+
+<ParamField path="role-id" type="string">
+  The ID of the created IAM role.
+</ParamField>
+
+<ParamField path="role-arn" type="string">
+  The ARN of the created IAM role. Use this ARN to annotate Kubernetes service accounts and attach IAM policies.
+</ParamField>
+
+## Resources Provisioned
+
+### IAM Role
+
+```hcl
+resource "aws_iam_role" "role" {
+  assume_role_policy = data.aws_iam_policy_document.k8s.json
+  name               = var.role
+  tags = {
+    created-by = "terraform"
+  }
+}
+```
+
+### Trust Policy Document
+
+```hcl
+data "aws_iam_policy_document" "k8s" {
+  statement {
+    actions = ["sts:AssumeRoleWithWebIdentity"]
+    effect  = "Allow"
+
+    condition {
+      test     = "StringEquals"
+      variable = "${replace(var.oidc_issuer_url, "https://", "")}:sub"
+      values   = [for namespace in var.namespaces : "system:serviceaccount:${namespace}:${var.role}"]
+    }
+
+    principals {
+      identifiers = [var.oidc_provider_arn]
+      type        = "Federated"
+    }
+  }
+}
+```
+
+The trust policy:
+- Allows the action `sts:AssumeRoleWithWebIdentity`
+- Uses a `StringEquals` condition to verify the service account identity
+- Constructs the service account subject format: `system:serviceaccount:<namespace>:<service-account-name>`
+- Supports multiple namespaces by creating a condition for each
+
+## Usage Example
+
+### Basic Usage
+
+```hcl
+module "app_iam_role" {
+  source = "./modules/iam"
+
+  role              = "my-app-sa"
+  namespaces        = ["production", "staging"]
+  oidc_issuer_url   = "https://oidc.eks.us-east-1.amazonaws.com/id/EXAMPLED539D4633E53DE1B716D3041E"
+  oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/oidc.eks.us-east-1.amazonaws.com/id/EXAMPLED539D4633E53DE1B716D3041E"
+}
+
+# Attach permissions to the role
+resource "aws_iam_role_policy_attachment" "s3_access" {
+  role       = module.app_iam_role.role-id
+  policy_arn = "arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess"
+}
+```
+
+### Kubernetes Service Account Annotation
+
+After creating the IAM role, annotate your Kubernetes service account:
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: my-app-sa
+  namespace: production
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/my-app-sa
+```
+
+### Complete Example with Policy
+
+```hcl
+module "vault_secret_sync_role" {
+  source = "./modules/iam"
+
+  role              = "secret-sync"
+  namespaces        = ["default"]
+  oidc_issuer_url   = data.aws_eks_cluster.cluster.identity[0].oidc[0].issuer
+  oidc_provider_arn = aws_iam_openid_connect_provider.cluster.arn
+}
+
+resource "aws_iam_role_policy" "vault_access" {
+  name = "vault-access"
+  role = module.vault_secret_sync_role.role-id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret"
+        ]
+        Resource = "arn:aws:secretsmanager:us-east-1:123456789012:secret:*"
+      }
+    ]
+  })
+}
+```
+
+## How It Works
+
+1. **OIDC Federation**: The Kubernetes cluster has an OIDC provider registered in AWS IAM
+2. **Service Account Token**: When a pod uses a service account, Kubernetes issues a signed OIDC token
+3. **AssumeRoleWithWebIdentity**: The pod exchanges this token for AWS credentials by calling `sts:AssumeRoleWithWebIdentity`
+4. **Trust Policy Validation**: AWS validates the token signature and checks the trust policy conditions
+5. **Temporary Credentials**: If valid, AWS issues temporary credentials for the pod to use
+
+## Dependencies
+
+This module requires:
+- AWS provider configured
+- EKS cluster with OIDC provider enabled
+- OIDC provider registered in AWS IAM
+
+## Notes
+
+- The role name must match the Kubernetes service account name for the IRSA (IAM Roles for Service Accounts) pattern to work correctly
+- Service accounts in any of the specified namespaces can assume this role
+- The trust policy uses `StringEquals` for exact matching of the service account identity
+- All resources are tagged with `created-by = "terraform"` for tracking

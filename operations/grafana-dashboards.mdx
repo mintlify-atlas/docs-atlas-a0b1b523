@@ -1,0 +1,425 @@
+---
+title: "Grafana Dashboards"
+description: "Monitoring dashboards for Penn Labs infrastructure and applications"
+---
+
+## Overview
+
+Penn Labs uses Grafana for monitoring infrastructure and application metrics. Grafana is connected to Prometheus as a data source and displays real-time metrics through various dashboards.
+
+**Access:** https://grafana.pennlabs.org
+
+**Authentication:** GitHub OAuth (requires membership in `pennlabs` organization)
+
+## Dashboard Architecture
+
+Grafana is deployed in the Kubernetes cluster using Helm:
+
+**Configuration** (`terraform/helm/grafana.yaml`):
+- **Persistence:** Enabled with 10Gi StatefulSet
+- **Plugins:** grafana-piechart-panel
+- **Ingress:** Available at grafana.pennlabs.org with TLS
+- **Data Source:** Prometheus server in monitoring namespace
+
+**Dashboard Provisioning:**
+
+Dashboards are automatically loaded from GitHub:
+```yaml
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+      - name: "default"
+        orgId: 1
+        type: file
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards/default
+```
+
+## Available Dashboards
+
+Penn Labs maintains several custom dashboards in the `grafana-dashboards/` directory.
+
+### 1. Traefik Dashboard
+
+**Purpose:** Monitor Traefik 1.7 ingress controller instances
+
+**File:** `grafana-dashboards/traefik.json`
+
+**Metrics Shown:**
+- Request rate and response times
+- HTTP status code breakdown (2xx, 4xx, 5xx)
+- Backend health and availability
+- Request duration percentiles
+- Active connections
+
+**Use Cases:**
+- Diagnose slow API responses
+- Identify traffic spikes
+- Monitor ingress health
+- Track error rates by endpoint
+
+**Based on:** [Grafana Dashboard 4475](https://grafana.com/grafana/dashboards/4475)
+
+### 2. Pod Dashboard
+
+**Purpose:** Monitor the status of all pods across clusters
+
+**File:** `grafana-dashboards/pod-dashboard.json`
+
+**Metrics Shown:**
+- Pod status (Running, Pending, Failed)
+- Container restarts
+- Resource usage (CPU, Memory)
+- Pod age and uptime
+- Node distribution
+
+**Use Cases:**
+- Quick overview of cluster health
+- Identify pods with issues
+- Monitor deployment rollouts
+- Check resource utilization
+- Detect crash loops
+
+### 3. Pod Alerting Dashboard
+
+**Purpose:** Alert when pods exceed normal conditions
+
+**File:** `grafana-dashboards/pod-alerting-dashboard.json`
+
+**Why It Exists:**
+
+Grafana currently doesn't allow variable datasources within alerts, so this dedicated dashboard provides alerts for pod metrics.
+
+**Alerts Configured:**
+- High CPU usage
+- High memory usage
+- Excessive container restarts
+- Pod crash loops
+- Pods stuck in Pending state
+
+**Notification:** Alerts are sent to Slack via webhook
+
+### 4. Cert Manager Dashboard
+
+**Purpose:** Monitor TLS certificate status and expiration
+
+**File:** `grafana-dashboards/cert-manager.json`
+
+**Metrics Shown:**
+- Certificate expiration dates
+- Certificate renewal status
+- ACME challenge success/failure
+- Certificate issuance time
+- Ready vs Not Ready certificates
+
+**Use Cases:**
+- Prevent certificate expiration
+- Monitor cert-manager health
+- Troubleshoot certificate issues
+- Track certificate renewal process
+
+**Based on:** [Grafana Dashboard 11001](https://grafana.com/grafana/dashboards/11001)
+
+### 5. Node Exporter Dashboard
+
+**Purpose:** Monitor Kubernetes node hardware and OS metrics
+
+**Source:** Grafana community dashboard 1860 (revision 19)
+
+**Metrics Shown:**
+- CPU usage and load average
+- Memory and swap usage
+- Disk I/O and space
+- Network traffic
+- System uptime
+
+**Use Cases:**
+- Monitor node health
+- Identify resource bottlenecks
+- Plan capacity upgrades
+- Diagnose performance issues
+
+## Dashboard Configuration
+
+Dashboards are configured in `terraform/production-cluster.tf`:
+
+```hcl
+resource "helm_release" "grafana" {
+  name       = "grafana"
+  repository = "https://charts.helm.sh/stable"
+  chart      = "grafana"
+  version    = "5.1.4"
+  
+  values = [file("helm/grafana.yaml")]
+}
+```
+
+With dashboard sources defined in `terraform/helm/grafana.yaml`:
+
+```yaml
+dashboards:
+  default:
+    node-exporter:
+      gnetId: 1860
+      revision: 19
+    cert-manager:
+      url: https://raw.githubusercontent.com/pennlabs/infrastructure/master/grafana-dashboards/cert-manager.json
+    traefik:
+      url: https://raw.githubusercontent.com/pennlabs/infrastructure/master/grafana-dashboards/traefik.json
+    pod-alerting-dashboard:
+      url: https://raw.githubusercontent.com/pennlabs/infrastructure/master/grafana-dashboards/pod-alerting-dashboard.json
+    pod-dashboard:
+      url: https://raw.githubusercontent.com/pennlabs/infrastructure/master/grafana-dashboards/pod-dashboard.json
+```
+
+**Dashboard Updates:**
+
+Dashboards are automatically updated from GitHub. To modify:
+
+1. Edit the JSON file in `grafana-dashboards/`
+2. Commit and push to the `master` branch
+3. Grafana will reload the dashboard automatically
+
+## Data Source Configuration
+
+Grafana is connected to Prometheus as its primary data source:
+
+```yaml
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        url: http://prometheus-server.monitoring
+        access: proxy
+        orgId: 1
+```
+
+**Prometheus Location:**
+- **Namespace:** `monitoring`
+- **Service:** `prometheus-server`
+- **Port:** 80 (HTTP)
+
+## Alerting Configuration
+
+Grafana sends alerts to Slack when thresholds are exceeded.
+
+**Slack Integration** (`terraform/helm/grafana.yaml`):
+```yaml
+notifiers:
+  notifiers.yaml:
+    notifiers:
+      - name: Slack
+        type: slack
+        uid: slack
+        org_id: 1
+        is_default: true
+        send_reminder: false
+        settings:
+          url: ${SLACK_NOTIFICATION_URL}
+```
+
+**Required Secret:**
+
+The Slack webhook URL is stored in Vault and synced to a Kubernetes secret:
+
+```hcl
+module "vault" {
+  source = "./modules/vault"
+  GF_SLACK_URL = var.GF_SLACK_URL
+  # ... other config
+}
+```
+
+**Environment Variables:**
+
+Grafana loads secrets from the `grafana` Kubernetes secret:
+```yaml
+envFromSecret: "grafana"
+```
+
+This includes:
+- `ADMIN_USER` - Grafana admin username
+- `ADMIN_PASSWORD` - Grafana admin password
+- `SLACK_NOTIFICATION_URL` - Slack webhook for alerts
+
+## Using the Dashboards
+
+### Accessing Grafana
+
+1. Navigate to https://grafana.pennlabs.org
+2. Click "Sign in with GitHub"
+3. Authorize the Grafana app
+4. You'll be logged in if you're a member of `pennlabs` organization
+
+**GitHub OAuth Configuration:**
+```yaml
+grafana.ini:
+  auth.github:
+    enabled: true
+    scopes: user:email,read:org
+    allowed_organizations: pennlabs
+```
+
+### Navigating Dashboards
+
+**Home Screen:**
+- Click the Grafana logo (top left) to see all dashboards
+- Use search to find specific dashboards
+- Star frequently used dashboards for quick access
+
+**Time Range:**
+- Use the time picker (top right) to adjust time window
+- Common ranges: Last 5m, 15m, 1h, 6h, 24h
+- Use "Refresh" dropdown to auto-refresh
+
+**Variables:**
+
+Some dashboards have variables (dropdowns at top):
+- Select specific namespace, pod, or service
+- Variables filter the displayed metrics
+
+### Common Workflows
+
+#### Checking Deployment Health
+
+1. Open **Pod Dashboard**
+2. Look for pods with status not "Running"
+3. Check container restart counts
+4. Review resource usage for the application
+
+#### Investigating Slow Responses
+
+1. Open **Traefik Dashboard**
+2. Check request duration percentiles
+3. Look for increased latency in specific backends
+4. Correlate with pod resource usage
+
+#### Monitoring Certificate Expiration
+
+1. Open **Cert Manager Dashboard**
+2. Check "Days Until Expiration" panel
+3. Verify certificates are renewing automatically
+4. Investigate any certificates in "Not Ready" state
+
+#### Troubleshooting Node Issues
+
+1. Open **Node Exporter Dashboard**
+2. Select the problematic node
+3. Check CPU, memory, and disk usage
+4. Review network traffic and errors
+
+## Creating Custom Dashboards
+
+### In the UI (Temporary)
+
+1. Click "+" → "Dashboard"
+2. Add panels with queries
+3. Save the dashboard
+
+**Note:** UI-created dashboards are not persisted in code and may be lost.
+
+### In Code (Recommended)
+
+1. **Export the dashboard:**
+   - Click dashboard settings (gear icon)
+   - Click "JSON Model"
+   - Copy the JSON
+
+2. **Save to repository:**
+   ```bash
+   cd grafana-dashboards/
+   # Create new file
+   vim my-dashboard.json
+   # Paste and save
+   ```
+
+3. **Add to Grafana config** in `terraform/helm/grafana.yaml`:
+   ```yaml
+   dashboards:
+     default:
+       my-dashboard:
+         url: https://raw.githubusercontent.com/pennlabs/infrastructure/master/grafana-dashboards/my-dashboard.json
+   ```
+
+4. **Apply the change:**
+   ```bash
+   cd terraform/
+   terraform apply -target=helm_release.grafana
+   ```
+
+5. **Commit to Git:**
+   ```bash
+   git add grafana-dashboards/my-dashboard.json terraform/helm/grafana.yaml
+   git commit -m "Add custom dashboard for monitoring X"
+   git push
+   ```
+
+## Troubleshooting
+
+### Dashboard Not Loading
+
+**Symptom:** Dashboard shows "No data" or doesn't load
+
+**Solutions:**
+1. Check Prometheus is running:
+   ```bash
+   kubectl get pods -n monitoring -l app=prometheus
+   ```
+
+2. Verify data source connection:
+   - Go to Configuration → Data Sources
+   - Click "Prometheus"
+   - Click "Test" button
+
+3. Check time range is appropriate (not too far in past/future)
+
+### Alerts Not Firing
+
+**Symptom:** No Slack notifications despite threshold being exceeded
+
+**Solutions:**
+1. Check alert rules are defined in dashboard
+2. Verify Slack webhook URL is correct:
+   ```bash
+   kubectl get secret grafana -o jsonpath='{.data.SLACK_NOTIFICATION_URL}' | base64 -d
+   ```
+3. Test notification channel in Grafana UI
+4. Check Grafana logs for errors:
+   ```bash
+   kubectl logs -l app=grafana
+   ```
+
+### Can't Access Grafana
+
+**Symptom:** GitHub login doesn't work
+
+**Solutions:**
+1. Verify you're a member of `pennlabs` GitHub organization
+2. Check GitHub OAuth app configuration
+3. Ensure you've authorized the Grafana app
+4. Try incognito/private browsing mode
+
+### Dashboard Changes Not Appearing
+
+**Symptom:** Updated dashboard JSON not showing in Grafana
+
+**Solutions:**
+1. Verify file is committed to master branch
+2. Check file URL is accessible (test in browser)
+3. Restart Grafana pod:
+   ```bash
+   kubectl rollout restart deployment/grafana
+   ```
+4. Clear browser cache
+
+## Additional Resources
+
+- [Grafana Documentation](https://grafana.com/docs/grafana/latest/)
+- [Prometheus Documentation](https://prometheus.io/docs/)
+- [Grafana Dashboard Best Practices](https://grafana.com/docs/grafana/latest/dashboards/)
+- [Alerting Guide](/operations/alerting)
+- [Logging Documentation](/operations/logging)

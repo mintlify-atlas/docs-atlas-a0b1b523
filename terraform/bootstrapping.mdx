@@ -1,0 +1,199 @@
+---
+title: Bootstrapping Infrastructure
+description: Step-by-step guide to bootstrap Penn Labs infrastructure from scratch
+---
+
+<Warning>
+This guide is for creating Penn Labs infrastructure from scratch. Only follow these steps if you're rebuilding the entire infrastructure or setting up a new environment.
+</Warning>
+
+This guide walks through bootstrapping the complete Penn Labs infrastructure using Terraform.
+
+## Prerequisites
+
+Before starting, ensure you have:
+
+- Terraform installed
+- `psql` (PostgreSQL client) installed
+- AWS Console access with permissions to create IAM users
+- All required environment variables (see below)
+
+## Step 1: Create AWS Credentials
+
+<Steps>
+  <Step title="Create Terraform IAM User">
+    1. Go to [AWS IAM Console](https://console.aws.amazon.com/iam/home#/users)
+    2. Create a new user named `terraform`
+    3. Attach the `AdministratorAccess` policy to the user
+    4. Generate access keys for the user
+  </Step>
+
+  <Step title="Export AWS Credentials">
+    Export the following environment variables:
+
+    | Variable | Description |
+    | --- | --- |
+    | `AWS_ACCESS_KEY_ID` | The AWS Access Key for terraform |
+    | `AWS_SECRET_ACCESS_KEY` | The AWS Secret Key for terraform |
+
+    ```bash
+    export AWS_ACCESS_KEY_ID="your-access-key-id"
+    export AWS_SECRET_ACCESS_KEY="your-secret-access-key"
+    ```
+  </Step>
+
+  <Step title="Export Additional Environment Variables">
+    Export all environment variables specified in the [Terraform README inputs](/terraform/overview#environment-variables):
+
+    ```bash
+    export GH_PERSONAL_TOKEN="your-github-token"
+    export GF_GH_CLIENT_ID="your-grafana-client-id"
+    export GF_GH_CLIENT_SECRET="your-grafana-client-secret"
+    export GF_SLACK_URL="your-slack-webhook-url"
+    ```
+  </Step>
+</Steps>
+
+## Step 2: Create S3 Backend
+
+<Note>
+The S3 backend stores Terraform state remotely, allowing team collaboration and state locking.
+</Note>
+
+<Steps>
+  <Step title="Prepare Configuration">
+    In the `terraform/` directory:
+
+    1. Comment out the `terraform` block in `provider.tf`
+    2. Comment out everything in `vault.tf`
+
+    This is necessary because the backend and Vault don't exist yet.
+  </Step>
+
+  <Step title="Create Backend Bucket">
+    Run the following commands:
+
+    ```bash
+    terraform init
+    terraform apply --target module.tfstate_backend
+    ```
+
+    This creates the S3 bucket that will store Terraform state.
+  </Step>
+</Steps>
+
+## Step 3: Initial Infrastructure Deployment
+
+<Steps>
+  <Step title="Configure Vault DNS">
+    <Warning>
+    You will need to manually create the verification DNS record for Vault and rerun `terraform apply`.
+    </Warning>
+
+    After the initial apply, check the AWS Certificate Manager console for the DNS validation record required for the Vault TLS certificate.
+  </Step>
+
+  <Step title="Export Vault Token">
+    After Vault is initialized, export the root token:
+
+    | Variable | Description |
+    | --- | --- |
+    | `VAULT_TOKEN` | The root vault token you just generated |
+
+    ```bash
+    export VAULT_TOKEN="your-vault-root-token"
+    ```
+
+    <Note>
+    Keep all previously exported environment variables active.
+    </Note>
+  </Step>
+
+  <Step title="Enable Remote Backend">
+    Uncomment the `terraform` block in `provider.tf`, then run:
+
+    ```bash
+    terraform init
+    terraform apply
+    ```
+
+    <Note>
+    If you encounter issues, running `terraform apply` a second time usually resolves them.
+    </Note>
+  </Step>
+</Steps>
+
+## Step 4: Configure Vault DNS
+
+Create the following DNS records in your DNS provider. Find the Elastic Load Balancer DNS name for Vault in the AWS Management Console.
+
+| Type | Name | Destination |
+| --- | --- | --- |
+| CNAME | vault.pennlabs.org | xyz.us-east-1.elb.amazonaws.com |
+| CNAME | \_acme-challenge.pennlabs.org | \_acme-challenge.upenn.club |
+
+<Note>
+Replace `xyz.us-east-1.elb.amazonaws.com` with the actual ELB DNS name from the AWS console.
+</Note>
+
+## Step 5: Initialize Vault
+
+<Steps>
+  <Step title="Visit Vault UI">
+    Navigate to [https://vault.pennlabs.org](https://vault.pennlabs.org) and follow the initialization prompts.
+  </Step>
+
+  <Step title="Save Vault Credentials">
+    <Warning>
+    Save the root token and recovery key in a secure location (e.g., password manager). These cannot be recovered if lost.
+    </Warning>
+  </Step>
+</Steps>
+
+## Step 6: Complete Vault Configuration
+
+<Steps>
+  <Step title="Uncomment Vault Configuration">
+    Uncomment everything in `vault.tf`.
+  </Step>
+
+  <Step title="Apply Final Configuration">
+    ```bash
+    terraform init
+    terraform apply
+    ```
+  </Step>
+</Steps>
+
+## Step 7: Configure Production DNS
+
+Create the following DNS records. Find the Traefik load balancer IP address in the AWS Management Console.
+
+| Type | Name | Destination |
+| --- | --- | --- |
+| A | pennlabs.org | y.y.y.y |
+| CNAME | *.pennlabs.org | pennlabs.org |
+| A | \<all product domains\> | y.y.y.y |
+| CNAME | \_acme-challenge.\<all product domains\> | \_acme-challenge.upenn.club |
+
+<Note>
+Replace `y.y.y.y` with the actual Traefik IP address. Product domains include: ohq.io, pennbasics.com, penncfa.com, pennclubs.com, penncoursealert.com, penncourseplan.com, penncoursereview.com, penndegreeplan.com, penncourses.org, pennmobile.org.
+</Note>
+
+## Verification
+
+If all steps completed successfully, you should have:
+
+- A fully functional EKS Kubernetes cluster
+- RDS PostgreSQL database cluster
+- HashiCorp Vault for secrets management
+- Configured DNS for all product domains
+- GitHub Actions integration
+- Monitoring and observability infrastructure
+
+You can verify the cluster is healthy by running:
+
+```bash
+kubectl get nodes
+kubectl get pods --all-namespaces
+```

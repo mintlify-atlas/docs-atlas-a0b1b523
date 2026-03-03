@@ -1,0 +1,222 @@
+---
+title: "Deployment Guide"
+description: "How deployments work through the Penn Labs CI/CD pipeline"
+---
+
+## Overview
+
+Penn Labs uses an automated deployment pipeline that flows from GitHub Actions through Kraken and Kittyhawk to Kubernetes. This guide explains how deployments work and what's required to deploy applications.
+
+## Deployment Pipeline
+
+The deployment pipeline consists of four main stages:
+
+```
+GitHub Actions → Kraken → Kittyhawk → Kubernetes (EKS)
+```
+
+### 1. GitHub Actions
+
+When code is pushed to the `master` branch, GitHub Actions workflows automatically trigger. These workflows are generated using **CDKActions** and configured in `.github/cdk/`.
+
+For most Penn Labs applications using the standard Django + React structure, the workflow:
+- Lints and tests the code
+- Builds Docker images for backend and frontend
+- Publishes images to Docker Hub
+- Triggers the deployment job
+
+**Required GitHub Secrets:**
+- `AWS_ACCOUNT_ID` - AWS account ID for EKS cluster
+- `GH_AWS_ACCESS_KEY_ID` - AWS access key for GitHub Actions user
+- `GH_AWS_SECRET_ACCESS_KEY` - AWS secret key for GitHub Actions user
+- `DOCKERHUB_TOKEN` - Token for publishing to Docker Hub
+
+### 2. Kraken
+
+[Kraken](https://kraken.pennlabs.org/) is a CDKActions library that configures GitHub Actions workflows. It provides:
+
+- `LabsApplicationStack` - Pre-configured CI/CD for Django + React projects
+- `DeployJob` - Handles the deployment process
+- `DjangoProject` and `ReactProject` - Individual project configurations
+
+Kraken is defined in `cdk/kraken/` and generates the workflow YAML files.
+
+**Key Features:**
+- Automatically runs tests before deploying
+- Only deploys from the master branch
+- Sets environment variables like `GIT_SHA` for image tags
+
+### 3. Kittyhawk
+
+[Kittyhawk](https://kittyhawk.pennlabs.org/) is an automated Kubernetes YAML generator built on CDK8s. It allows you to define deployment configurations in TypeScript using constructs.
+
+**Common Constructs:**
+- `ReactApplication` - Frontend React apps
+- `DjangoApplication` - Backend Django apps
+- `RedisApplication` - Redis instances
+- `CronJob` - Scheduled jobs
+
+**How YAML Generation Works:**
+
+The `DeployJob` in Kraken runs the following steps:
+
+1. **Synth manifests** - Generate Kubernetes YAML from TypeScript:
+   ```bash
+   cd k8s
+   yarn install --frozen-lockfile
+   export RELEASE_NAME=${REPOSITORY#*/}
+   export GIT_SHA=${{ github.sha }}
+   yarn build
+   ```
+
+2. **Deploy** - Apply manifests to Kubernetes:
+   ```bash
+   aws eks --region us-east-1 update-kubeconfig --name production --role-arn arn:aws:iam::${AWS_ACCOUNT_ID}:role/kubectl
+   kubectl apply -f k8s/dist/ -l app.kubernetes.io/component=certificate
+   kubectl apply -f k8s/dist/ --prune -l app.kubernetes.io/part-of=$RELEASE_NAME
+   ```
+
+The generated YAML files appear in `k8s/dist/` but are **not committed to the repository**.
+
+### 4. Kubernetes (EKS)
+
+The final stage applies the manifests to the production EKS cluster:
+
+**Cluster Details:**
+- **Name:** `production`
+- **Region:** `us-east-1`
+- **Version:** 1.23
+- **Node Type:** r5d.xlarge (SPOT instances)
+- **Network:** Prefix delegation enabled for more IPs per node
+
+**Deployment Process:**
+1. Certificates are applied first (if any)
+2. All resources with the application label are applied
+3. The `--prune` flag removes resources that are no longer defined
+
+## IAM Permissions
+
+The GitHub Actions user needs specific IAM permissions to deploy:
+
+**Required Policies:**
+- `kubectl` - Assume the kubectl IAM role
+- `view-eks` - Describe EKS cluster to get connection info
+
+The `kubectl` role is defined in `terraform/eks.tf` and can be assumed by:
+- SRE team members
+- GitHub Actions user (`gh-actions`)
+- Bastion instance
+
+## Deployment Configuration
+
+### Setting Up a New Project
+
+1. **Create CDKActions config** in `.github/cdk/`:
+   ```typescript
+   import { LabsApplicationStack } from '@pennlabs/kraken';
+   
+   new LabsApplicationStack(app, {
+     djangoProjectName: 'myproject',
+     dockerImageBaseName: 'my-product',
+   });
+   ```
+
+2. **Create Kittyhawk config** in `k8s/main.ts`:
+   ```typescript
+   import { PennLabsChart, DjangoApplication, ReactApplication } from '@pennlabs/kittyhawk';
+   
+   export class MyChart extends PennLabsChart {
+     constructor(scope: Construct) {
+       super(scope);
+       
+       new DjangoApplication(this, 'django-asgi', {
+         deployment: {
+           image: 'pennlabs/my-product-backend',
+           replicas: 2,
+           secret: 'my-product',
+         },
+       });
+       
+       new ReactApplication(this, 'react', {
+         deployment: {
+           image: 'pennlabs/my-product-frontend',
+           replicas: 2,
+         },
+         domain: { host: 'myapp.pennlabs.org', paths: ['/'] },
+       });
+     }
+   }
+   ```
+
+3. **Build the GitHub Actions workflows**:
+   ```bash
+   cd .github/cdk
+   yarn build
+   git add ../workflows/
+   git commit -m "Add CI/CD workflows"
+   ```
+
+## Monitoring Deployments
+
+After pushing to master:
+
+1. **Check GitHub Actions** - View workflow progress in the Actions tab
+2. **Verify pods are running**:
+   ```bash
+   kubectl get pods -l app.kubernetes.io/part-of=<release-name>
+   ```
+3. **Check pod logs**:
+   ```bash
+   kubectl logs <pod-name>
+   ```
+4. **Monitor in Grafana** - Use the Pod Dashboard to see deployment status
+
+## Common Issues
+
+### Image Pull Errors
+
+**Symptom:** `ImagePullBackOff` errors
+
+**Solution:** Ensure `docker-pull-secret` exists in the namespace:
+```bash
+kubectl get secret docker-pull-secret
+```
+
+### Secret Not Found
+
+**Symptom:** Pods fail to start with secret errors
+
+**Solution:** Check that secrets are synced from Vault:
+```bash
+kubectl get secret <secret-name>
+```
+
+See [Secrets Management](/operations/secrets-management) for more details.
+
+### Certificate Issues
+
+**Symptom:** TLS/HTTPS not working
+
+**Solution:** Check certificate status:
+```bash
+kubectl get certificate
+kubectl describe certificate <cert-name>
+```
+
+See [Certificate Renewal](/operations/certificate-renewal) for troubleshooting.
+
+## Best Practices
+
+- **Always run tests locally** before pushing to master
+- **Use semantic versioning** for Docker image tags when needed
+- **Review generated YAML** locally with `yarn build` in `k8s/` before pushing
+- **Monitor deployments** in real-time through GitHub Actions and Grafana
+- **Set appropriate replica counts** based on load (typically 2 for redundancy)
+- **Use resource limits** to prevent pods from consuming too many resources
+
+## Additional Resources
+
+- [Kraken Documentation](https://kraken.pennlabs.org/)
+- [Kittyhawk Documentation](https://kittyhawk.pennlabs.org/)
+- [CDK8s Documentation](https://cdk8s.io/)
+- [Rollback Procedures](/operations/rollbacks)

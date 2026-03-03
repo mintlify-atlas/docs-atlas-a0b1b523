@@ -1,0 +1,110 @@
+---
+title: Quickstart
+description: Create your first CI/CD workflow with Kraken using LabsApplicationStack
+---
+
+# Quickstart
+
+This guide will help you create your first working CI/CD workflow using Kraken.
+
+## Django + React Project
+
+Most Penn Labs products follow the pattern of a Django project in the `backend` directory and a React project in the `frontend` directory. Kraken provides a `LabsApplicationStack` that can easily configure CI for this common use case.
+
+<Steps>
+  <Step title="Configure LabsApplicationStack">
+    In your `.github/cdk/main.ts` file (or wherever your cdkactions app is defined), replace the generated stack with:
+
+    ```typescript
+    new LabsApplicationStack(app, {
+      djangoProjectName: 'exampleDjangoProject',
+      dockerImageBaseName: 'example-product',
+    });
+    ```
+
+    This configuration will:
+    - Lint, test, and build both Django and React projects
+    - Publish Docker images for both projects
+    - Deploy your application
+
+    The published Docker images will be named:
+    - `$dockerImageBaseName-backend` (e.g., `example-product-backend`)
+    - `$dockerImageBaseName-frontend` (e.g., `example-product-frontend`)
+  </Step>
+
+  <Step title="Build the workflow">
+    Navigate to the cdkactions directory and build:
+
+    ```bash
+    cd .github/cdk
+    yarn build
+    ```
+
+    This generates the GitHub Actions workflow YAML files.
+  </Step>
+
+  <Step title="Commit and push">
+    Commit the generated workflow files:
+
+    ```bash
+    git add .
+    git commit -m "Add Kraken CI/CD workflow"
+    git push
+    ```
+  </Step>
+
+  <Step title="Verify the workflow">
+    Once pushed, GitHub Actions will automatically run your workflow on the next push. Check the Actions tab in your GitHub repository to see it in action.
+  </Step>
+</Steps>
+
+## Custom Configuration
+
+If your repository structure differs from the standard 1 Django + 1 React pattern, you can use the `DjangoProject` and `ReactProject` classes directly for more flexibility.
+
+### Example: Django with Multiple Frontends
+
+For a project with one Django backend and multiple React frontends:
+
+```typescript
+const workflow = new Workflow(this, 'workflow', {
+  name: 'Workflow',
+  on: 'push',
+});
+
+const django = new DjangoProject(workflow, {
+  projectName: 'djangoProject',
+  path: 'backend',
+  imageName: 'project-backend',
+});
+
+const reactOne = new ReactProject(workflow, {
+  id: 'one',
+  path: 'frontendOne',
+  imageName: 'project-frontendOne',
+});
+
+const reactTwo = new ReactProject(workflow, {
+  id: 'two',
+  path: 'frontendTwo',
+  imageName: 'project-frontendTwo',
+});
+
+new DeployJob(workflow, {}, {
+  needs: [django.publishJobId, reactOne.publishJobId, reactTwo.publishJobId],
+});
+```
+
+This configuration will:
+- Lint, test, and build the Django project
+- Lint, test, and build both React projects
+- Publish Docker images for all three projects
+- Deploy the application after all images are published
+
+## Next Steps
+
+Now that you have a working workflow, explore:
+- Advanced configuration options
+- Custom job definitions
+- Integration tests
+- Deployment strategies

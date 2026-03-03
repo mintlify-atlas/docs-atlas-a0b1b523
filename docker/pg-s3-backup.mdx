@@ -1,0 +1,43 @@
+---
+title: PostgreSQL S3 Backup
+description: Docker image for backing up PostgreSQL databases to Amazon S3
+---
+
+The `pg-s3-backup` image backs up all databases in a PostgreSQL cluster to an Amazon S3 bucket. This image is used for daily automated database backups.
+
+## Purpose
+
+This Docker image bundles the AWS CLI and PostgreSQL tools to provide automated database backup functionality. It connects to a PostgreSQL cluster, dumps all databases, and uploads them to a specified S3 bucket.
+
+## Usage
+
+To use this image, you need to configure the following environment variables:
+
+### Required Environment Variables
+
+| Variable | Description |
+| --- | --- |
+| `AWS_ACCESS_KEY_ID` | AWS access key for S3 authentication |
+| `AWS_SECRET_ACCESS_KEY` | AWS secret key for S3 authentication |
+| `AWS_DEFAULT_REGION` | AWS region where the S3 bucket is located |
+| `S3_BUCKET` | Name of the S3 bucket to store backups |
+| `DATABASE_URL` | PostgreSQL connection URL |
+
+### Example
+
+```bash
+docker run \
+  -e AWS_ACCESS_KEY_ID="your-access-key" \
+  -e AWS_SECRET_ACCESS_KEY="your-secret-key" \
+  -e AWS_DEFAULT_REGION="us-east-1" \
+  -e S3_BUCKET="your-backup-bucket" \
+  -e DATABASE_URL="postgresql://user:password@host:5432/dbname" \
+  pennlabs/pg-s3-backup
+```
+
+## How It Works
+
+1. Connects to the PostgreSQL cluster using the provided `DATABASE_URL`
+2. Dumps all databases in the cluster
+3. Uploads the database dumps to the specified S3 bucket
+4. Can be scheduled to run daily for automated backups

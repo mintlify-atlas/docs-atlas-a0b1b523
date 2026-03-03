@@ -1,0 +1,445 @@
+---
+title: Cluster Upgrades
+description: EKS cluster and node upgrade procedures, best practices, and rollback strategies
+---
+
+## Overview
+
+The production EKS cluster requires periodic upgrades to maintain security, stability, and access to new Kubernetes features. This guide covers the upgrade process for both the EKS control plane and worker nodes.
+
+## Current Configuration
+
+Production cluster configuration (`/home/daytona/workspace/source/terraform/eks.tf:1-26`):
+
+```hcl
+module "eks-production" {
+  source          = "terraform-aws-modules/eks/aws"
+  version         = "18.4.0"
+  cluster_name    = local.k8s_cluster_name
+  cluster_version = "1.23"
+  subnet_ids      = module.vpc.private_subnets
+  vpc_id          = module.vpc.vpc_id
+  eks_managed_node_groups = {
+    spot = {
+      desired_size = local.k8s_cluster_size
+      max_size     = local.k8s_cluster_size
+      min_size     = local.k8s_cluster_size
+
+      create_launch_template = false
+      launch_template_name   = ""
+      disk_size              = 50
+      instance_types         = ["r5d.xlarge"]
+      capacity_type          = "SPOT"
+    }
+  }
+  tags = {
+    created-by = "terraform"
+  }
+}
+```
+
+**Key details:**
+- **Current version**: Kubernetes 1.23
+- **Terraform module**: `terraform-aws-modules/eks/aws` v18.4.0
+- **Node type**: Spot instances (r5d.xlarge)
+- **Capacity**: Fixed size (desired = max = min)
+
+## Upgrade Planning
+
+### Version Support Policy
+
+<Warning>
+  AWS supports the latest three Kubernetes minor versions. Clusters must be upgraded at least once per year to stay within support.
+</Warning>
+
+**EKS version support:**
+- Active support: Latest 3 minor versions
+- Extended support: Additional 12 months (with fees)
+- End of support: No security patches or support
+
+### Pre-Upgrade Checklist
+
+1. **Review Kubernetes changelog** for breaking changes
+2. **Check API deprecations** - Some APIs are removed in new versions
+3. **Test in staging environment** if available
+4. **Backup cluster state** - Export critical resources
+5. **Review addon compatibility** - cert-manager, ingress controllers, etc.
+6. **Schedule maintenance window** - Coordinate with team
+7. **Verify node capacity** - Ensure enough nodes for workload during upgrade
+
+### Version Skipping
+
+<Warning>
+  EKS does not support skipping minor versions. You must upgrade sequentially (1.23 → 1.24 → 1.25).
+</Warning>
+
+## Control Plane Upgrade
+
+### Procedure
+
+The control plane upgrade is managed by AWS and happens automatically when you update the Terraform configuration.
+
+#### 1. Update Terraform Configuration
+
+Edit `terraform/eks.tf`:
+
+```hcl
+module "eks-production" {
+  ...
+  cluster_version = "1.24"  # Increment by one minor version
+  ...
+}
+```
+
+#### 2. Review Terraform Plan
+
+```bash
+cd terraform
+terraform plan -target=module.eks-production
+```
+
+**Verify:**
+- Only cluster version is changing
+- No node group recreations
+- No unexpected resource deletions
+
+#### 3. Apply Upgrade
+
+```bash
+terraform apply -target=module.eks-production
+```
+
+**Expected behavior:**
+- Control plane upgrade takes 20-45 minutes
+- API server may have brief interruptions
+- Running pods are not affected
+
+#### 4. Verify Control Plane
+
+```bash
+kubectl version --short
+kubectl get nodes
+```
+
+Control plane version should show new version, nodes still show old version.
+
+### Control Plane Upgrade Notes
+
+- **Zero downtime**: Multiple API servers upgraded one at a time
+- **API compatibility**: Old kubelet versions (N-2) still supported
+- **Automatic rollback**: AWS automatically rolls back on failure
+- **No workload impact**: Pods continue running during upgrade
+
+## Node Upgrade
+
+### Strategy
+
+<Warning>
+  The cluster uses fixed-size node groups (min = desired = max). Node upgrades require temporary capacity increase to avoid downtime.
+</Warning>
+
+### Option 1: Rolling Node Upgrade (Recommended)
+
+This approach creates new nodes before draining old ones.
+
+#### 1. Increase Node Group Capacity
+
+Edit `terraform/eks.tf` to temporarily increase capacity:
+
+```hcl
+eks_managed_node_groups = {
+  spot = {
+    desired_size = local.k8s_cluster_size * 2  # Double capacity
+    max_size     = local.k8s_cluster_size * 2
+    min_size     = local.k8s_cluster_size
+    ...
+  }
+}
+```
+
+Apply:
+```bash
+terraform apply -target=module.eks-production
+```
+
+#### 2. Update Node AMI Version
+
+The EKS module automatically selects the AMI for the cluster version. Force node group refresh:
+
+```hcl
+eks_managed_node_groups = {
+  spot = {
+    ...
+    # Add or update this to force node replacement
+    update_config = {
+      max_unavailable_percentage = 50
+    }
+  }
+}
+```
+
+#### 3. Apply Node Upgrade
+
+```bash
+terraform apply -target=module.eks-production
+```
+
+**AWS will:**
+- Launch new nodes with updated AMI
+- Wait for new nodes to be Ready
+- Cordon old nodes
+- Drain pods from old nodes
+- Terminate old nodes
+
+#### 4. Monitor Node Replacement
+
+```bash
+# Watch node status
+kubectl get nodes -w
+
+# Check pod distribution
+kubectl get pods -o wide --all-namespaces
+```
+
+#### 5. Restore Original Capacity
+
+After all nodes are upgraded:
+
+```hcl
+eks_managed_node_groups = {
+  spot = {
+    desired_size = local.k8s_cluster_size  # Restore original size
+    max_size     = local.k8s_cluster_size
+    min_size     = local.k8s_cluster_size
+    ...
+  }
+}
+```
+
+```bash
+terraform apply -target=module.eks-production
+```
+
+### Option 2: Blue/Green Node Group Upgrade
+
+Create an entirely new node group with new version.
+
+#### 1. Create New Node Group
+
+```hcl
+eks_managed_node_groups = {
+  spot = { ... }  # Existing nodes
+  
+  spot-new = {
+    desired_size = local.k8s_cluster_size
+    max_size     = local.k8s_cluster_size
+    min_size     = local.k8s_cluster_size
+    disk_size    = 50
+    instance_types = ["r5d.xlarge"]
+    capacity_type  = "SPOT"
+  }
+}
+```
+
+#### 2. Apply and Verify New Nodes
+
+```bash
+terraform apply -target=module.eks-production
+kubectl get nodes
+```
+
+#### 3. Drain Old Nodes
+
+```bash
+for node in $(kubectl get nodes -l eks.amazonaws.com/nodegroup=spot -o name); do
+  kubectl drain $node --ignore-daemonsets --delete-emptydir-data --timeout=300s
+done
+```
+
+#### 4. Remove Old Node Group
+
+```hcl
+eks_managed_node_groups = {
+  spot-new = { ... }  # Rename to 'spot' if desired
+}
+```
+
+```bash
+terraform apply -target=module.eks-production
+```
+
+## Post-Upgrade Verification
+
+### 1. Verify Cluster Health
+
+```bash
+# Check node status
+kubectl get nodes
+
+# Verify all nodes are Ready and on new version
+kubectl get nodes -o wide
+
+# Check system pods
+kubectl get pods -n kube-system
+```
+
+### 2. Verify Workloads
+
+```bash
+# Check all pods are running
+kubectl get pods --all-namespaces | grep -v Running
+
+# Verify services are accessible
+kubectl get svc --all-namespaces
+```
+
+### 3. Test Application Functionality
+
+- Run smoke tests on critical applications
+- Verify ingress and load balancers
+- Check certificate renewals
+- Test database connections
+
+### 4. Update Addons
+
+After cluster upgrade, update cluster addons:
+
+```bash
+# Check addon versions
+aws eks describe-addon-versions --kubernetes-version 1.24
+
+# Update kube-proxy
+aws eks update-addon --cluster-name <cluster-name> --addon-name kube-proxy --addon-version <version>
+
+# Update vpc-cni
+aws eks update-addon --cluster-name <cluster-name> --addon-name vpc-cni --addon-version <version>
+
+# Update coredns
+aws eks update-addon --cluster-name <cluster-name> --addon-name coredns --addon-version <version>
+```
+
+## Spot Instance Considerations
+
+<Warning>
+  The cluster uses Spot instances which can be interrupted. Account for this during upgrades.
+</Warning>
+
+### Spot Interruption Handling
+
+The cluster has AWS Node Termination Handler installed (`/home/daytona/workspace/source/terraform/eks.tf:77-85`):
+
+```hcl
+resource "helm_release" "aws-node-termination-handler" {
+  name       = "aws-node-termination-handler"
+  repository = "https://aws.github.io/eks-charts"
+  chart      = "aws-node-termination-handler"
+  version    = "0.13.0"
+  namespace  = "kube-system"
+  values     = [file("helm/aws-node-termination-handler.yaml")]
+}
+```
+
+**This handler:**
+- Monitors for Spot interruption notices
+- Cordons nodes before termination
+- Drains pods gracefully (120s default)
+- Prevents new pods from scheduling on interrupted nodes
+
+### Best Practices for Spot
+
+1. **Upgrade during low traffic** - Reduces impact of spot interruptions
+2. **Monitor spot availability** - Check instance availability in region
+3. **Use multiple instance types** - Increase spot capacity pool
+4. **Set pod disruption budgets** - Ensure minimum replicas during disruptions
+
+## Rollback Procedures
+
+### Control Plane Rollback
+
+<Warning>
+  EKS does not support control plane downgrades. Rollback requires cluster recreation.
+</Warning>
+
+If control plane upgrade fails:
+
+1. **AWS automatic rollback** - Control plane auto-reverts on failure
+2. **Manual intervention** - Contact AWS Support if stuck
+
+### Node Rollback
+
+If nodes fail after upgrade:
+
+#### Quick Rollback (if old nodes still exist)
+
+1. **Uncordon old nodes:**
+   ```bash
+   kubectl uncordon <old-node-name>
+   ```
+
+2. **Drain new nodes:**
+   ```bash
+   kubectl drain <new-node-name> --ignore-daemonsets --delete-emptydir-data
+   ```
+
+3. **Revert Terraform:**
+   ```bash
+   git revert <commit-hash>
+   terraform apply -target=module.eks-production
+   ```
+
+## Troubleshooting
+
+### Nodes Not Joining Cluster
+
+**Check node logs:**
+```bash
+aws ssm start-session --target <instance-id>
+sudo journalctl -u kubelet -n 100
+```
+
+**Common issues:**
+- IAM role trust relationship incorrect
+- Security group blocking kubelet communication
+- aws-auth ConfigMap not updated
+
+### Pods Not Scheduling
+
+**Check node taints:**
+```bash
+kubectl describe node <node-name> | grep Taints
+```
+
+**Check pod events:**
+```bash
+kubectl describe pod <pod-name>
+```
+
+### API Server Unavailable
+
+**Check EKS cluster status:**
+```bash
+aws eks describe-cluster --name <cluster-name> --query 'cluster.status'
+```
+
+**If "UPDATING"** - wait for upgrade to complete (up to 45 minutes)
+
+**If "FAILED"** - AWS will auto-rollback, contact support if needed
+
+## Best Practices
+
+1. **Stay current** - Upgrade within 2 minor versions of latest
+2. **Test thoroughly** - Use staging environment for validation
+3. **Upgrade incrementally** - One minor version at a time
+4. **Schedule wisely** - Low traffic periods, avoid Fridays
+5. **Monitor closely** - Watch metrics during and after upgrade
+6. **Document changes** - Note any configuration changes required
+7. **Communicate** - Inform team of maintenance windows
+8. **Backup first** - Export critical resources before upgrade
+9. **PodDisruptionBudgets** - Ensure critical apps have PDBs
+10. **Addon compatibility** - Verify all addons support new version
+
+## Emergency Contacts
+
+- **AWS Support**: Use AWS Support Console for EKS issues
+- **On-call engineer**: Check internal documentation
+- **Escalation**: Follow incident response procedures

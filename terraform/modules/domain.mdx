@@ -1,0 +1,167 @@
+---
+title: Domain Module
+description: Manages AWS Route53 DNS zones and records for domain configuration
+---
+
+The `domain` module configures AWS Route53 hosted zones and DNS records for a domain, including apex domain aliasing, wildcard records, and email configuration for both Mailgun and Gmail.
+
+## Overview
+
+This module provisions:
+
+- Route53 hosted zone for the domain
+- Apex domain A record (aliased to Traefik load balancer)
+- Wildcard CNAME record for subdomains
+- SPF TXT record for email authentication
+- Mailgun CNAME record for email routing
+- Gmail MX records for email delivery
+
+## Input Variables
+
+<ParamField path="domain" type="string" required>
+  The domain name to configure. This will be used to create the Route53 hosted zone.
+</ParamField>
+
+<ParamField path="traefik_lb_name" type="string" required>
+  DNS name of the Traefik load balancer. The apex domain will be aliased to this load balancer.
+</ParamField>
+
+<ParamField path="traefik_zone_id" type="string" required>
+  Zone ID of the Traefik load balancer. Required for creating the alias record.
+</ParamField>
+
+## Outputs
+
+<ParamField path="zone_id" type="string">
+  The Route53 zone ID of the created hosted zone. This can be used by other modules to create additional DNS records.
+</ParamField>
+
+## Resources Provisioned
+
+### Hosted Zone
+
+```hcl
+resource "aws_route53_zone" "domain" {
+  name = var.domain
+}
+```
+
+Creates a Route53 hosted zone for the specified domain.
+
+### Apex Domain Record
+
+```hcl
+resource "aws_route53_record" "apex-domain" {
+  zone_id = aws_route53_zone.domain.zone_id
+  name    = ""
+  type    = "A"
+
+  alias {
+    name                   = var.traefik_lb_name
+    zone_id                = var.traefik_zone_id
+    evaluate_target_health = false
+  }
+}
+```
+
+Creates an A record for the apex domain (e.g., `example.com`) that aliases to the Traefik load balancer.
+
+### Wildcard Record
+
+```hcl
+resource "aws_route53_record" "wildcard" {
+  zone_id = aws_route53_zone.domain.zone_id
+  name    = "*"
+  type    = "CNAME"
+  ttl     = 3600
+  records = [aws_route53_zone.domain.name]
+}
+```
+
+Creates a wildcard CNAME record (e.g., `*.example.com`) pointing to the apex domain, allowing all subdomains to resolve.
+
+### Email Configuration
+
+#### SPF Record
+
+```hcl
+resource "aws_route53_record" "spf" {
+  zone_id                          = aws_route53_zone.domain.zone_id
+  name                             = ""
+  type                             = "TXT"
+  ttl                              = 3600
+  records                          = ["v=spf1 include:mailgun.org ~all"]
+  multivalue_answer_routing_policy = true
+  set_identifier                   = "spf"
+}
+```
+
+Configures SPF (Sender Policy Framework) to authorize Mailgun to send emails on behalf of the domain.
+
+#### Mailgun CNAME
+
+```hcl
+resource "aws_route53_record" "mailgun" {
+  zone_id = aws_route53_zone.domain.zone_id
+  name    = "email"
+  type    = "CNAME"
+  ttl     = 3600
+  records = ["mailgun.org."]
+}
+```
+
+Creates a CNAME record for Mailgun email routing at `email.example.com`.
+
+#### Gmail MX Records
+
+```hcl
+resource "aws_route53_record" "gmail" {
+  zone_id = aws_route53_zone.domain.zone_id
+  name    = ""
+  type    = "MX"
+  ttl     = 3600
+  records = [
+    "5 gmr-smtp-in.l.google.com.",
+    "10 alt1.gmr-smtp-in.l.google.com.",
+    "20 alt2.gmr-smtp-in.l.google.com.",
+    "30 alt3.gmr-smtp-in.l.google.com.",
+    "40 alt4.gmr-smtp-in.l.google.com.",
+  ]
+}
+```
+
+Configures MX records for Gmail email delivery with multiple priority levels for redundancy.
+
+## Usage Example
+
+```hcl
+module "domain" {
+  source = "./modules/domain"
+
+  domain           = "pennlabs.org"
+  traefik_lb_name  = "a1b2c3d4e5f6.us-east-1.elb.amazonaws.com"
+  traefik_zone_id  = "Z35SXDOTRQ7X7K"
+}
+
+# Use the zone_id output
+resource "aws_route53_record" "custom" {
+  zone_id = module.domain.zone_id
+  name    = "api"
+  type    = "CNAME"
+  ttl     = 300
+  records = ["api-backend.example.com"]
+}
+```
+
+## Dependencies
+
+This module requires:
+- AWS provider configured with appropriate credentials
+- Existing Traefik load balancer (zone ID and DNS name)
+
+## Notes
+
+- The wildcard record uses a TTL of 3600 seconds (1 hour)
+- Email records support both Mailgun (for transactional emails) and Gmail (for mailbox hosting)
+- The apex domain uses an alias record rather than a CNAME to comply with DNS standards
+- All email-related records use a 3600 second TTL

@@ -1,0 +1,410 @@
+---
+title: "Rollback Procedures"
+description: "How to rollback deployments and handle emergency situations"
+---
+
+## Overview
+
+When a deployment causes issues in production, you may need to rollback to a previous working version. This guide covers different rollback strategies and emergency procedures.
+
+## Quick Rollback (Recommended)
+
+The fastest way to rollback a deployment is using Kubernetes' built-in rollout functionality.
+
+### Rollback a Deployment
+
+Rollback to the previous revision:
+```bash
+kubectl rollout undo deployment/<deployment-name>
+```
+
+Rollback to a specific revision:
+```bash
+# View revision history
+kubectl rollout history deployment/<deployment-name>
+
+# Rollback to specific revision
+kubectl rollout undo deployment/<deployment-name> --to-revision=<revision-number>
+```
+
+### Check Rollback Status
+
+Monitor the rollback progress:
+```bash
+# Watch rollout status
+kubectl rollout status deployment/<deployment-name>
+
+# View current pods
+kubectl get pods -l app=<app-name>
+
+# Check pod logs
+kubectl logs <pod-name>
+```
+
+## Rollback via Re-deployment
+
+For a more controlled rollback, you can redeploy a previous version through the CI/CD pipeline.
+
+### Method 1: Redeploy Previous Commit
+
+1. **Find the last working commit:**
+   ```bash
+   git log --oneline
+   ```
+
+2. **Create a new commit that reverts changes:**
+   ```bash
+   git revert <bad-commit-sha>
+   git push origin master
+   ```
+
+   This triggers a new deployment with the reverted code.
+
+3. **Monitor the deployment:**
+   - Watch GitHub Actions workflow
+   - Check pod status in Kubernetes
+   - Verify application functionality
+
+### Method 2: Update Image Tag
+
+If you know the previous working Docker image tag:
+
+1. **Update the Kittyhawk config** in `k8s/main.ts`:
+   ```typescript
+   new DjangoApplication(this, 'django-asgi', {
+     deployment: {
+       image: 'pennlabs/my-app-backend',
+       tag: 'previous-working-sha', // Specify old tag
+       // ... other config
+     },
+   });
+   ```
+
+2. **Generate and apply manifests:**
+   ```bash
+   cd k8s
+   export GIT_SHA=previous-working-sha
+   export RELEASE_NAME=my-app
+   yarn build
+   
+   # Apply to cluster
+   kubectl apply -f dist/
+   ```
+
+3. **Commit the change** to document the rollback:
+   ```bash
+   git add k8s/main.ts
+   git commit -m "Rollback to previous version due to <issue>"
+   git push origin master
+   ```
+
+## Emergency Procedures
+
+### Critical Service Down
+
+If a critical service is completely down:
+
+1. **Check pod status immediately:**
+   ```bash
+   kubectl get pods -l app.kubernetes.io/part-of=<release-name>
+   ```
+
+2. **View recent events:**
+   ```bash
+   kubectl get events --sort-by='.lastTimestamp' | head -20
+   ```
+
+3. **Check pod logs for errors:**
+   ```bash
+   kubectl logs <pod-name> --previous  # Logs from crashed container
+   kubectl logs <pod-name>              # Current logs
+   ```
+
+4. **Immediate rollback:**
+   ```bash
+   kubectl rollout undo deployment/<deployment-name>
+   ```
+
+5. **Verify service recovery:**
+   ```bash
+   # Check pods are running
+   kubectl get pods -l app=<app-name>
+   
+   # Test the service
+   curl https://<app-domain>.pennlabs.org/health
+   ```
+
+### Database Migration Issues
+
+If a database migration caused problems:
+
+**⚠️ WARNING:** Rolling back database migrations is complex and risky.
+
+1. **Rollback application first** to stop new traffic:
+   ```bash
+   kubectl rollout undo deployment/<deployment-name>
+   ```
+
+2. **Assess database state:**
+   - Check which migrations were applied
+   - Determine if data was modified or just schema
+   - Review migration code for reversibility
+
+3. **For Django applications:**
+   ```bash
+   # Connect to a pod
+   kubectl exec -it <pod-name> -- bash
+   
+   # Check migration status
+   python manage.py showmigrations
+   
+   # Rollback migration (if safe)
+   python manage.py migrate <app_name> <previous_migration>
+   ```
+
+4. **If migration can't be rolled back:**
+   - Restore from database backup (see [Database Backups](/operations/database-backups))
+   - Write a new forward migration to fix the issue
+   - Consult with the team before taking action
+
+### Bad Configuration
+
+If a ConfigMap or Secret change caused issues:
+
+1. **Identify the problematic config:**
+   ```bash
+   kubectl get configmap <name> -o yaml
+   kubectl get secret <name> -o yaml
+   ```
+
+2. **Restore previous version:**
+   ```bash
+   # If you have the previous YAML
+   kubectl apply -f previous-config.yaml
+   
+   # Or edit directly
+   kubectl edit configmap <name>
+   kubectl edit secret <name>
+   ```
+
+3. **Restart affected pods:**
+   ```bash
+   kubectl rollout restart deployment/<deployment-name>
+   ```
+
+### Memory/CPU Issues
+
+If pods are being OOMKilled or CPU throttled:
+
+1. **Check resource usage:**
+   ```bash
+   kubectl top pods
+   kubectl describe pod <pod-name> | grep -A5 "Limits\|Requests"
+   ```
+
+2. **Temporary fix - scale down:**
+   ```bash
+   kubectl scale deployment/<deployment-name> --replicas=1
+   ```
+
+3. **Increase resource limits** in Kittyhawk config:
+   ```typescript
+   new DjangoApplication(this, 'django-asgi', {
+     deployment: {
+       // ... other config
+       resources: {
+         limits: {
+           memory: '2Gi',  // Increased from 1Gi
+           cpu: '1000m',   // Increased from 500m
+         },
+       },
+     },
+   });
+   ```
+
+4. **Redeploy with new limits**
+
+## Accessing the Cluster
+
+To perform manual rollbacks, you need kubectl access to the cluster.
+
+### Using AWS IAM Role
+
+The `kubectl` IAM role allows cluster access:
+
+1. **Assume the kubectl role:**
+   ```bash
+   aws sts assume-role \
+     --role-arn arn:aws:iam::<AWS_ACCOUNT_ID>:role/kubectl \
+     --role-session-name rollback-session
+   ```
+
+2. **Configure kubectl:**
+   ```bash
+   aws eks --region us-east-1 update-kubeconfig \
+     --name production \
+     --role-arn arn:aws:iam::<AWS_ACCOUNT_ID>:role/kubectl
+   ```
+
+3. **Verify access:**
+   ```bash
+   kubectl get nodes
+   ```
+
+### Using Bastion Host
+
+The bastion instance has kubectl pre-configured:
+
+1. **SSH to bastion** (requires SSH key)
+2. **kubectl is available** and configured
+3. **Run rollback commands** as needed
+
+### Via GitHub Actions
+
+For automated rollbacks, you can trigger a rerun of a previous successful workflow:
+
+1. Go to GitHub Actions tab
+2. Find the last successful deployment
+3. Click "Re-run all jobs"
+
+This redeploys the previous version.
+
+## Rollback Checklist
+
+### Before Rolling Back
+
+- [ ] Identify the issue and confirm rollback is necessary
+- [ ] Notify team members (Slack, etc.)
+- [ ] Document the issue and reason for rollback
+- [ ] Check if data was modified (database migrations, etc.)
+- [ ] Determine which version to rollback to
+
+### During Rollback
+
+- [ ] Execute rollback command
+- [ ] Monitor rollout status
+- [ ] Check pod logs for errors
+- [ ] Verify application functionality
+- [ ] Check monitoring dashboards (Grafana)
+- [ ] Test critical user flows
+
+### After Rollback
+
+- [ ] Confirm service is stable
+- [ ] Update incident documentation
+- [ ] Create issue to track the bug
+- [ ] Investigate root cause
+- [ ] Plan fix for the issue
+- [ ] Add tests to prevent regression
+- [ ] Communicate status to stakeholders
+
+## Prevention Strategies
+
+### Enable Gradual Rollouts
+
+Consider using gradual rollout strategies:
+
+```typescript
+new DjangoApplication(this, 'django-asgi', {
+  deployment: {
+    // ... other config
+    strategy: {
+      type: 'RollingUpdate',
+      rollingUpdate: {
+        maxSurge: 1,        // Max pods above desired count
+        maxUnavailable: 0,  // Keep all pods available during update
+      },
+    },
+  },
+});
+```
+
+### Implement Health Checks
+
+Ensure applications have proper health checks:
+
+```typescript
+new DjangoApplication(this, 'django-asgi', {
+  deployment: {
+    // ... other config
+    readinessProbe: {
+      httpGet: {
+        path: '/api/health/',
+        port: 8000,
+      },
+      initialDelaySeconds: 10,
+      periodSeconds: 5,
+    },
+    livenessProbe: {
+      httpGet: {
+        path: '/api/health/',
+        port: 8000,
+      },
+      initialDelaySeconds: 30,
+      periodSeconds: 10,
+    },
+  },
+});
+```
+
+### Test Before Deploying
+
+- Run full test suite locally
+- Test database migrations on a copy of production data
+- Use staging environment if available
+- Review deployment diff carefully
+- Have another team member review changes
+
+### Monitor Deployments
+
+- Watch Grafana dashboards during deployment
+- Set up alerts for critical metrics
+- Check error rates in Datadog
+- Monitor application logs
+- Test critical paths after deployment
+
+## Common Rollback Scenarios
+
+### Scenario 1: New feature causes 500 errors
+
+```bash
+# Quick rollback
+kubectl rollout undo deployment/my-app-django-asgi
+
+# Monitor
+kubectl rollout status deployment/my-app-django-asgi
+
+# Verify
+curl https://myapp.pennlabs.org/api/health/
+```
+
+### Scenario 2: Database migration failed
+
+```bash
+# Rollback app first
+kubectl rollout undo deployment/my-app-django-asgi
+
+# Then fix migration
+kubectl exec -it <pod-name> -- python manage.py migrate <app> <previous-migration>
+
+# Or restore from backup if needed
+# (See Database Backups documentation)
+```
+
+### Scenario 3: Wrong environment variable
+
+```bash
+# Fix the secret
+kubectl edit secret my-app
+
+# Restart pods to pick up change
+kubectl rollout restart deployment/my-app-django-asgi
+```
+
+## Additional Resources
+
+- [Kubernetes Deployments Documentation](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/)
+- [kubectl Rollout Commands](https://kubernetes.io/docs/reference/kubectl/cheatsheet/#updating-resources)
+- [Deployment Guide](/operations/deployment-guide)
+- [Database Backups](/operations/database-backups)
+- [Grafana Dashboards](/operations/grafana-dashboards)

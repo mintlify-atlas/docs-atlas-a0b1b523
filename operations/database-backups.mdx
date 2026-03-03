@@ -1,0 +1,205 @@
+---
+title: Database Backups
+description: Automated PostgreSQL backup procedures and restore operations
+---
+
+## Overview
+
+Database backups are automated using a custom Docker container that dumps all PostgreSQL databases to S3. The backup system runs as a Kubernetes CronJob and uses AWS IAM roles for secure access to S3 storage.
+
+## Backup Schedule
+
+Backups run automatically via CronJob:
+
+```yaml
+schedule: "21 2 * * *"
+```
+
+This translates to **2:21 AM UTC daily**.
+
+## Backup Process
+
+### Architecture
+
+The backup system consists of:
+
+1. **Docker Image**: `pennlabs/pg-s3-backup`
+2. **Storage**: S3 bucket at `s3://sql.pennlabs.org`
+3. **IAM Role**: `db-backup` with S3 permissions
+4. **CronJob**: Kubernetes job scheduled daily
+
+### How It Works
+
+The backup script (`/home/daytona/workspace/source/docker/pg-s3-backup/backup:1-41`):
+
+1. Lists all databases in the PostgreSQL cluster
+2. Excludes system databases (postgres, rdsadmin, template0, template1)
+3. Runs `pg_dump` on each database in parallel
+4. Compresses dumps using gzip
+5. Uploads to S3 with timestamp-based organization
+
+### Backup Structure
+
+Backups are organized in S3 by timestamp:
+
+```
+s3://sql.pennlabs.org/
+  YYYYMMDD - DayName DD Month YYYY @ HH:MM/
+    YYYYMMDD - DayName DD Month YYYY @ HH:MM - database1.sql.gz
+    YYYYMMDD - DayName DD Month YYYY @ HH:MM - database2.sql.gz
+```
+
+## Configuration
+
+### Required Environment Variables
+
+The backup container requires:
+
+- `AWS_DEFAULT_REGION`: Set to `us-east-1`
+- `DATABASE_URL`: PostgreSQL connection string
+- `S3_BUCKET`: Target S3 bucket name
+
+IAM credentials are provided via IRSA (IAM Roles for Service Accounts).
+
+### IAM Permissions
+
+The `db-backup` role has the following S3 permissions (`/home/daytona/workspace/source/terraform/db-backup.tf:1-16`):
+
+```hcl
+actions = ["s3:PutObject", "s3:Get*"]
+resources = [
+  "arn:aws:s3:::sql.pennlabs.org/*",
+  "arn:aws:s3:::sql.pennlabs.org"
+]
+```
+
+### Kubernetes Configuration
+
+Deployed via Helm with configuration in `/home/daytona/workspace/source/terraform/helm/db-backup.yaml:1-14`:
+
+```yaml
+cronjobs:
+  - name: db-backup
+    schedule: "21 2 * * *"
+    secret: db-backup
+    image: pennlabs/pg-s3-backup
+    tag: 18806efdf96777fce2341b8eb81c95bf1a7d6897
+    extraEnv:
+      - name: AWS_DEFAULT_REGION
+        value: "us-east-1"
+
+rbac:
+  createSA: true
+  roleARN: ${roleARN}
+```
+
+## Restore Procedures
+
+### Prerequisites
+
+1. AWS credentials with S3 read access
+2. PostgreSQL client tools installed
+3. Network access to target database
+
+### Restore Steps
+
+#### 1. List Available Backups
+
+```bash
+aws s3 ls s3://sql.pennlabs.org/ --recursive
+```
+
+#### 2. Download Backup
+
+```bash
+aws s3 cp "s3://sql.pennlabs.org/YYYYMMDD - Day DD Month YYYY @ HH:MM/YYYYMMDD - Day DD Month YYYY @ HH:MM - dbname.sql.gz" - | gunzip > restore.sql
+```
+
+#### 3. Restore Database
+
+<Warning>
+  Restoring will overwrite existing data. Always verify the target database before proceeding.
+</Warning>
+
+```bash
+# Create new database if needed
+psql $DATABASE_URL/postgres -c "CREATE DATABASE dbname;"
+
+# Restore from dump
+psql $DATABASE_URL/dbname < restore.sql
+```
+
+#### 4. Verify Restoration
+
+```bash
+psql $DATABASE_URL/dbname -c "SELECT count(*) FROM pg_tables WHERE schemaname = 'public';"
+```
+
+## Monitoring
+
+### Check Backup Status
+
+View recent CronJob executions:
+
+```bash
+kubectl get cronjobs
+kubectl get jobs --selector=cronjob=db-backup
+```
+
+### View Backup Logs
+
+```bash
+# Get most recent job
+JOB=$(kubectl get jobs --selector=cronjob=db-backup --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name}')
+
+# View logs
+kubectl logs job/$JOB
+```
+
+Successful backups will show:
+```
+Starting backup
+Creating dump of database1
+Uploading dump of database1
+...
+Backup finished successfully
+Total data backed up: XXX MB
+```
+
+## Troubleshooting
+
+### Backup Job Fails
+
+**Check pod logs:**
+```bash
+kubectl logs -l cronjob=db-backup --tail=100
+```
+
+**Common issues:**
+- IAM role permissions incorrect
+- Database connection timeout
+- S3 bucket access denied
+- Insufficient disk space on pod
+
+### Restore Fails
+
+**Error: "role does not exist"**
+```bash
+# Create required roles before restoring
+psql $DATABASE_URL/dbname -c "CREATE ROLE rolename;"
+```
+
+**Error: "database already exists"**
+```bash
+# Drop and recreate database
+psql $DATABASE_URL/postgres -c "DROP DATABASE dbname;"
+psql $DATABASE_URL/postgres -c "CREATE DATABASE dbname;"
+```
+
+## Best Practices
+
+1. **Test restores regularly** - Verify backups are usable
+2. **Monitor backup size** - Unexpected size changes may indicate issues
+3. **Set S3 lifecycle policies** - Archive or delete old backups
+4. **Encrypt sensitive backups** - Use S3 encryption for compliance
+5. **Document restore procedures** - Keep runbooks updated for incident response

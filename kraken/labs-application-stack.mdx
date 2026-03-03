@@ -1,0 +1,213 @@
+---
+title: LabsApplicationStack
+description: A complete CI/CD stack for Django + React applications that handles linting, testing, building, publishing Docker images, and deployment.
+---
+
+`LabsApplicationStack` is a comprehensive workflow stack designed for the common Penn Labs architecture: a Django backend and React frontend. It orchestrates the entire CI/CD pipeline from code quality checks to production deployment.
+
+## Overview
+
+The `LabsApplicationStack` creates a complete GitHub Actions workflow that:
+
+- Lints and tests both Django and React projects
+- Builds and publishes Docker images
+- Optionally runs integration tests
+- Deploys to production on the default branch
+
+By default, it publishes two Docker images: `{dockerImageBaseName}-backend` and `{dockerImageBaseName}-frontend`.
+
+## Constructor
+
+```typescript
+new LabsApplicationStack(
+  scope: Construct,
+  config: LabsApplicationStackProps,
+  overrides?: Partial<WorkflowProps>
+)
+```
+
+### Parameters
+
+<ParamField path="scope" type="Construct" required>
+  The cdkactions App instance that serves as the parent scope.
+</ParamField>
+
+<ParamField path="config" type="LabsApplicationStackProps" required>
+  Configuration object for the stack.
+</ParamField>
+
+<ParamField path="config.djangoProjectName" type="string" required>
+  Name of the Django project to test and build.
+</ParamField>
+
+<ParamField path="config.dockerImageBaseName" type="string" required>
+  Base name for Docker images. Will publish `{base}-backend` and `{base}-frontend` images.
+</ParamField>
+
+<ParamField path="config.backendPath" type="string" default="backend">
+  Path to the Django project directory within the repository.
+</ParamField>
+
+<ParamField path="config.frontendPath" type="string" default="frontend">
+  Path to the React project directory within the repository.
+</ParamField>
+
+<ParamField path="config.integrationTests" type="boolean" default={false}>
+  If true, runs integration tests using docker-compose before deploying.
+</ParamField>
+
+<ParamField path="config.djangoCheckProps" type="Partial<DjangoCheckJobProps>">
+  Optional props to customize the Django check job.
+</ParamField>
+
+<ParamField path="config.djangoCheckOverrides" type="Partial<JobProps>">
+  Optional overrides for the Django check job configuration.
+</ParamField>
+
+<ParamField path="config.djangoDockerProps" type="Partial<DockerPublishJobProps>">
+  Optional props to customize the Django Docker publish job.
+</ParamField>
+
+<ParamField path="config.djangoDockerOverrides" type="Partial<JobProps>">
+  Optional overrides for the Django Docker publish job configuration.
+</ParamField>
+
+<ParamField path="config.reactCheckProps" type="Partial<ReactCheckJobProps>">
+  Optional props to customize the React check job.
+</ParamField>
+
+<ParamField path="config.reactCheckOverrides" type="Partial<JobProps>">
+  Optional overrides for the React check job configuration.
+</ParamField>
+
+<ParamField path="config.reactDockerProps" type="Partial<DockerPublishJobProps>">
+  Optional props to customize the React Docker publish job.
+</ParamField>
+
+<ParamField path="config.reactDockerOverrides" type="Partial<JobProps>">
+  Optional overrides for the React Docker publish job configuration.
+</ParamField>
+
+<ParamField path="config.integrationProps" type="Partial<IntegrationTestsJobProps>">
+  Optional props to customize the integration tests job.
+</ParamField>
+
+<ParamField path="config.integrationOverrides" type="Partial<JobProps>">
+  Optional overrides for the integration tests job configuration.
+</ParamField>
+
+<ParamField path="config.deployProps" type="Partial<DeployJobProps>">
+  Optional props to customize the deploy job.
+</ParamField>
+
+<ParamField path="config.deployOverrides" type="Partial<JobProps>">
+  Optional overrides for the deploy job configuration.
+</ParamField>
+
+<ParamField path="overrides" type="Partial<WorkflowProps>">
+  Optional overrides for the workflow itself (name, triggers, etc.).
+</ParamField>
+
+## Basic Usage
+
+The simplest configuration for a standard Django + React project:
+
+```typescript
+import { LabsApplicationStack } from '@pennlabs/kraken';
+import { App } from 'cdkactions';
+
+const app = new App();
+
+new LabsApplicationStack(app, {
+  djangoProjectName: 'exampleDjangoProject',
+  dockerImageBaseName: 'example-product',
+});
+
+app.synth();
+```
+
+This creates a workflow that:
+1. Checks out code
+2. Runs Django linting and tests in `backend/`
+3. Runs React linting and tests in `frontend/`
+4. Builds and publishes `example-product-backend` Docker image
+5. Builds and publishes `example-product-frontend` Docker image
+6. Deploys to production (on master branch only)
+
+## Advanced Usage
+
+### Custom Paths
+
+If your project structure differs from the defaults:
+
+```typescript
+new LabsApplicationStack(app, {
+  djangoProjectName: 'myproject',
+  dockerImageBaseName: 'my-app',
+  backendPath: 'server',
+  frontendPath: 'client',
+});
+```
+
+### With Integration Tests
+
+Enable integration tests that run after building Docker images:
+
+```typescript
+new LabsApplicationStack(app, {
+  djangoProjectName: 'myproject',
+  dockerImageBaseName: 'my-app',
+  integrationTests: true,
+  integrationProps: {
+    testCommand: 'docker-compose -f docker-compose.test.yml run --rm integration-tests',
+  },
+});
+```
+
+### Custom Job Configuration
+
+Customize individual jobs within the stack:
+
+```typescript
+new LabsApplicationStack(app, {
+  djangoProjectName: 'myproject',
+  dockerImageBaseName: 'my-app',
+  djangoCheckProps: {
+    pythonVersion: '3.11',
+  },
+  reactCheckProps: {
+    nodeVersion: '18',
+  },
+  deployProps: {
+    defaultBranch: 'main',
+  },
+});
+```
+
+## Generated Workflow
+
+The stack generates a GitHub Actions workflow with the following job dependency graph:
+
+### Without Integration Tests
+
+```
+Django Check → Django Docker Publish ┐
+                                      ├→ Deploy
+React Check → React Docker Publish  ┘
+```
+
+### With Integration Tests
+
+```
+Django Check → Django Docker Build ┐
+                                    ├→ Integration Tests → Deploy
+React Check → React Docker Build   ┘
+```
+
+When `integrationTests` is enabled, Docker images are built but not published until integration tests pass. This ensures only validated images reach the registry.
+
+## See Also
+
+- [DjangoProject](/kraken/django-project) - Standalone Django workflow
+- [ReactProject](/kraken/react-project) - Standalone React workflow
+- [DeployJob](/kraken/deploy-job) - Deployment job details

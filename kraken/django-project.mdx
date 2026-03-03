@@ -1,0 +1,198 @@
+---
+title: DjangoProject
+description: A workflow component that lints, tests, builds, and publishes Docker images for Django projects.
+---
+
+`DjangoProject` is a high-level construct that creates a complete CI pipeline for Django applications. It combines Django-specific checks with Docker image building and publishing.
+
+## Overview
+
+The `DjangoProject` construct creates two sequential jobs:
+
+1. **DjangoCheckJob** - Lints and tests the Django project
+2. **DockerPublishJob** - Builds and publishes a Docker image
+
+The jobs run in sequence, with Docker publishing only occurring if all checks pass.
+
+## Constructor
+
+```typescript
+new DjangoProject(
+  workflow: Workflow,
+  config: DjangoProjectProps
+)
+```
+
+### Parameters
+
+<ParamField path="workflow" type="Workflow" required>
+  The cdkactions Workflow instance to add jobs to.
+</ParamField>
+
+<ParamField path="config" type="DjangoProjectProps" required>
+  Configuration object for the Django project.
+</ParamField>
+
+<ParamField path="config.projectName" type="string" required>
+  Name of the Django project to test (used for running tests and migrations).
+</ParamField>
+
+<ParamField path="config.imageName" type="string" required>
+  Name of the Docker image to publish (e.g., `my-app-backend`).
+</ParamField>
+
+<ParamField path="config.id" type="string">
+  Custom ID suffix to append to job names and IDs. Useful when using multiple DjangoProject instances in a single workflow.
+</ParamField>
+
+<ParamField path="config.path" type="string" default=".">
+  Location of the Django project within the repository.
+</ParamField>
+
+<ParamField path="config.checkProps" type="Partial<DjangoCheckJobProps>">
+  Optional props to customize the Django check job (Python version, dependencies, etc.).
+</ParamField>
+
+<ParamField path="config.checkOverrides" type="Partial<JobProps>">
+  Optional overrides for the check job configuration.
+</ParamField>
+
+<ParamField path="config.publishProps" type="Partial<DockerPublishJobProps>">
+  Optional props to customize the Docker publish job (registry, tags, etc.).
+</ParamField>
+
+<ParamField path="config.publishOverrides" type="Partial<JobProps>">
+  Optional overrides for the Docker publish job configuration.
+</ParamField>
+
+## Properties
+
+<ResponseField name="publishJobId" type="string">
+  The ID of the Docker publish job. Use this to create job dependencies.
+</ResponseField>
+
+<ResponseField name="dockerImageName" type="string">
+  The full name of the Docker image that will be built and published.
+</ResponseField>
+
+## Basic Usage
+
+Add a Django project workflow to an existing workflow:
+
+```typescript
+import { DjangoProject } from '@pennlabs/kraken';
+import { Workflow, Stack } from 'cdkactions';
+
+const workflow = new Workflow(this, 'build', {
+  name: 'Build and Test',
+  on: 'push',
+});
+
+const django = new DjangoProject(workflow, {
+  projectName: 'myproject',
+  path: 'backend',
+  imageName: 'my-app-backend',
+});
+```
+
+## Advanced Usage
+
+### Multiple Django Projects
+
+Use the `id` parameter to differentiate between multiple Django projects:
+
+```typescript
+const apiProject = new DjangoProject(workflow, {
+  id: 'api',
+  projectName: 'api',
+  path: 'services/api',
+  imageName: 'my-app-api',
+});
+
+const adminProject = new DjangoProject(workflow, {
+  id: 'admin',
+  projectName: 'admin',
+  path: 'services/admin',
+  imageName: 'my-app-admin',
+});
+```
+
+### Custom Python Version
+
+Configure the Python version used for testing:
+
+```typescript
+const django = new DjangoProject(workflow, {
+  projectName: 'myproject',
+  imageName: 'my-app-backend',
+  checkProps: {
+    pythonVersion: '3.11',
+  },
+});
+```
+
+### Using Job ID for Dependencies
+
+Create jobs that depend on the Django project completing:
+
+```typescript
+import { DjangoProject, DeployJob } from '@pennlabs/kraken';
+
+const django = new DjangoProject(workflow, {
+  projectName: 'myproject',
+  path: 'backend',
+  imageName: 'my-app-backend',
+});
+
+// Deploy only after Django build completes
+new DeployJob(workflow, {}, {
+  needs: [django.publishJobId],
+});
+```
+
+### Full Example with React
+
+Combine Django and React projects in a single workflow:
+
+```typescript
+import { DjangoProject, ReactProject, DeployJob } from '@pennlabs/kraken';
+import { Workflow, Stack } from 'cdkactions';
+
+const workflow = new Workflow(this, 'workflow', {
+  name: 'Build and Deploy',
+  on: 'push',
+});
+
+const django = new DjangoProject(workflow, {
+  projectName: 'djangoProject',
+  path: 'backend',
+  imageName: 'project-backend',
+});
+
+const react = new ReactProject(workflow, {
+  path: 'frontend',
+  imageName: 'project-frontend',
+});
+
+new DeployJob(workflow, {}, {
+  needs: [django.publishJobId, react.publishJobId],
+});
+```
+
+## Generated Workflow
+
+The `DjangoProject` construct generates the following job sequence:
+
+```
+Django Check Job
+  ↓
+Docker Publish Job
+```
+
+The Docker publish job only runs if the Django check job succeeds, ensuring that only tested code is built into images.
+
+## See Also
+
+- [ReactProject](/kraken/react-project) - Similar construct for React projects
+- [LabsApplicationStack](/kraken/labs-application-stack) - Complete stack for Django + React apps
+- [DeployJob](/kraken/deploy-job) - Deploy your built images

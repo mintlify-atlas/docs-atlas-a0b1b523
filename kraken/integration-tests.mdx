@@ -1,0 +1,350 @@
+---
+title: Integration Tests
+description: Learn how to add integration tests to your Kraken workflows using Docker Compose
+---
+
+Kraken provides the `IntegrationTestsJob` class to run integration tests using Docker Compose. This job loads built Docker images, starts services, and runs tests against a running application.
+
+## Overview
+
+The `IntegrationTestsJob` assumes you have:
+- A `docker-compose.test.yaml` file in the repository root
+- A Django service called `backend` in the compose file
+- Docker images built by previous jobs (integration-tests.ts:44-45)
+
+The job will:
+1. Download Docker image artifacts from build jobs
+2. Load images into Docker
+3. Start services with docker-compose
+4. Wait for the backend to be ready
+5. Populate the database
+6. Run your integration tests
+
+## Basic Usage
+
+```typescript
+import { Workflow } from 'cdkactions';
+import { DjangoProject, ReactProject, IntegrationTestsJob } from '@pennlabs/kraken';
+
+const workflow = new Workflow(this, 'workflow', {
+  name: 'Test',
+  on: 'push',
+});
+
+// Build images without publishing
+const django = new DjangoProject(workflow, {
+  projectName: 'myapp',
+  path: 'backend',
+  imageName: 'myapp-backend',
+  publishProps: { noPublish: true },
+});
+
+const react = new ReactProject(workflow, {
+  path: 'frontend',
+  imageName: 'myapp-frontend',
+  publishProps: { noPublish: true },
+});
+
+// Run integration tests
+new IntegrationTestsJob(
+  workflow,
+  {
+    testCommand: 'docker-compose -f docker-compose.test.yaml exec -T frontend yarn test:integration',
+    dockerBuildIds: ['build-backend', 'build-frontend'],
+    dockerImages: ['pennlabs/myapp-backend', 'pennlabs/myapp-frontend'],
+  },
+  {
+    needs: [django.publishJobId, react.publishJobId],
+  }
+);
+```
+
+## Configuration Options
+
+The `IntegrationTestsJob` accepts the following configuration (integration-tests.ts:9-37):
+
+### Test Command (Required)
+
+The docker-compose command(s) to run your integration tests:
+
+```typescript
+{
+  testCommand: 'docker-compose -f docker-compose.test.yaml exec -T frontend yarn test:e2e',
+}
+```
+
+You can run multiple commands:
+
+```typescript
+{
+  testCommand: `
+    docker-compose -f docker-compose.test.yaml exec -T backend python manage.py test integration
+    docker-compose -f docker-compose.test.yaml exec -T frontend yarn test:e2e
+  `,
+}
+```
+
+### Docker Build IDs (Required)
+
+List of job IDs that built Docker images without publishing (integration-tests.ts:24):
+
+```typescript
+{
+  dockerBuildIds: ['build-backend', 'build-frontend'],
+}
+```
+
+These IDs are used to download image artifacts and load them into Docker (integration-tests.ts:80-82).
+
+### Docker Images (Required)
+
+List of the full Docker image names to publish after tests pass (integration-tests.ts:29):
+
+```typescript
+{
+  dockerImages: [
+    'pennlabs/myapp-backend',
+    'pennlabs/myapp-frontend',
+  ],
+}
+```
+
+### Custom ID
+
+Optional ID suffix when using multiple integration test jobs:
+
+```typescript
+{
+  id: 'e2e',
+  testCommand: 'docker-compose -f docker-compose.test.yaml exec -T frontend yarn test:e2e',
+  dockerBuildIds: ['build-frontend'],
+  dockerImages: ['pennlabs/myapp-frontend'],
+}
+```
+
+### Post Integration Publish
+
+By default, a `PostIntegrationPublishJob` is created to publish images after tests pass (integration-tests.ts:35):
+
+```typescript
+{
+  createPostIntegrationPublishJob: true,  // Default
+}
+```
+
+Disable if you want to handle publishing manually:
+
+```typescript
+{
+  createPostIntegrationPublishJob: false,
+}
+```
+
+## How It Works
+
+### Step 1: Download Artifacts
+
+The job downloads all image artifacts built by previous jobs (integration-tests.ts:76):
+
+```yaml
+- uses: actions/download-artifact@v2
+```
+
+### Step 2: Load Docker Images
+
+Each image artifact is loaded into Docker (integration-tests.ts:79-82):
+
+```yaml
+- name: Load docker images
+  run: |
+    docker load --input build-backend/image.tar
+    docker load --input build-frontend/image.tar
+```
+
+### Step 3: Start Services
+
+Docker Compose starts all services defined in `docker-compose.test.yaml` (integration-tests.ts:85-87):
+
+```yaml
+- name: Run docker compose
+  run: |
+    mkdir -p /tmp/test-results
+    docker-compose -f docker-compose.test.yaml up -d
+```
+
+### Step 4: Wait for Backend
+
+The job waits for the Django backend to be ready by checking migrations (integration-tests.ts:90-94):
+
+```yaml
+- name: Wait for backend
+  run: |
+    for try in {1..20}; do
+      docker-compose -f docker-compose.test.yaml exec -T backend python manage.py migrate --check && break
+      sleep 5
+    done
+```
+
+### Step 5: Populate Database
+
+Runs the `populate` management command to seed test data (integration-tests.ts:97-98):
+
+```yaml
+- name: Populate backend
+  run: docker-compose -f docker-compose.test.yaml exec -T backend python manage.py populate
+```
+
+### Step 6: Run Tests
+
+Executes your test command (integration-tests.ts:101-102):
+
+```yaml
+- name: Run integration tests
+  run: docker-compose -f docker-compose.test.yaml exec -T frontend yarn test:integration
+```
+
+### Step 7: Cleanup and Error Handling
+
+The job includes error handling steps (integration-tests.ts:105-125):
+
+```yaml
+# Delete artifacts if tests fail or not on master
+- name: Delete artifacts when no longer needed
+  if: failure() || github.ref != 'refs/heads/master'
+  uses: geekyeggo/delete-artifact@v1
+  with:
+    name: |
+      build-backend
+      build-frontend
+
+# Print logs on failure
+- name: Print logs on failure
+  if: failure()
+  run: docker-compose -f docker-compose.test.yaml logs
+
+# Upload test artifacts on failure
+- name: Upload artifacts on failure
+  if: failure()
+  uses: actions/upload-artifact@v2
+  with:
+    name: cypress-output
+    path: /tmp/test-results
+```
+
+## Complete Example
+
+```typescript
+import { Workflow } from 'cdkactions';
+import { DjangoProject, ReactProject, IntegrationTestsJob, DeployJob } from '@pennlabs/kraken';
+
+const workflow = new Workflow(this, 'workflow', {
+  name: 'Build, Test, and Deploy',
+  on: 'push',
+});
+
+// Build backend without publishing (for testing)
+const backend = new DjangoProject(workflow, {
+  projectName: 'myapp',
+  path: 'backend',
+  imageName: 'myapp-backend',
+  publishProps: {
+    noPublish: true,  // Don't publish yet, wait for tests
+  },
+});
+
+// Build frontend without publishing (for testing)
+const frontend = new ReactProject(workflow, {
+  path: 'frontend',
+  imageName: 'myapp-frontend',
+  publishProps: {
+    noPublish: true,  // Don't publish yet, wait for tests
+  },
+});
+
+// Run integration tests and publish if they pass
+const integrationTests = new IntegrationTestsJob(
+  workflow,
+  {
+    testCommand: `
+      docker-compose -f docker-compose.test.yaml exec -T backend python manage.py test integration
+      docker-compose -f docker-compose.test.yaml exec -T frontend yarn test:e2e
+    `,
+    dockerBuildIds: [
+      'build-backend',
+      'build-frontend',
+    ],
+    dockerImages: [
+      backend.dockerImageName,
+      frontend.dockerImageName,
+    ],
+    createPostIntegrationPublishJob: true,  // Publish after tests pass
+  },
+  {
+    needs: [backend.publishJobId, frontend.publishJobId],
+  }
+);
+
+// Deploy after images are published
+new DeployJob(
+  workflow,
+  {},
+  {
+    needs: integrationTests.finalJobId,  // Wait for publish job
+  }
+);
+```
+
+## Using finalJobId
+
+The `IntegrationTestsJob` exposes a `finalJobId` property that points to either the integration test job itself or the post-integration publish job (integration-tests.ts:50):
+
+```typescript
+const tests = new IntegrationTestsJob(workflow, {
+  // ... config
+  createPostIntegrationPublishJob: true,
+});
+
+// finalJobId is 'post-integration-publish' when createPostIntegrationPublishJob is true
+// finalJobId is 'integration-tests' when createPostIntegrationPublishJob is false
+
+new DeployJob(workflow, {}, {
+  needs: tests.finalJobId,  // Always use finalJobId for dependencies
+});
+```
+
+## Docker Compose File Requirements
+
+Your `docker-compose.test.yaml` should:
+1. Use the built Docker images
+2. Include a service named `backend` that runs Django
+3. Configure test environment variables
+
+Example:
+
+```yaml
+version: '3.8'
+
+services:
+  backend:
+    image: pennlabs/myapp-backend:${GIT_SHA}
+    environment:
+      - DJANGO_SETTINGS_MODULE=myapp.settings.test
+      - DATABASE_URL=postgres://postgres@db/test
+    depends_on:
+      - db
+
+  frontend:
+    image: pennlabs/myapp-frontend:${GIT_SHA}
+    environment:
+      - REACT_APP_API_URL=http://backend:8000
+    depends_on:
+      - backend
+
+  db:
+    image: postgres:15
+    environment:
+      - POSTGRES_DB=test
+      - POSTGRES_HOST_AUTH_METHOD=trust
+```
+
+The `GIT_SHA` environment variable is automatically set by the job (integration-tests.ts:128).

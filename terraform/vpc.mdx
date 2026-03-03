@@ -1,0 +1,194 @@
+---
+title: "VPC Networking"
+description: "Virtual Private Cloud configuration with public/private subnets, NAT gateway, and EKS-specific tagging"
+---
+
+## Overview
+
+The VPC (Virtual Private Cloud) configuration provisions a complete network infrastructure for the production environment, including public and private subnets across multiple availability zones, NAT gateway for outbound connectivity, and proper tagging for EKS integration.
+
+## Core Resources
+
+### VPC Module
+
+The VPC is provisioned using the official AWS VPC Terraform module:
+
+```hcl
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "3.11.0"
+
+  name = "vpc"
+  cidr = "10.0.0.0/16"
+  azs  = data.aws_availability_zones.available.names
+  # Generate 6 non-overlapping subnets for our VPC. This results in 2^(32-20)=2^12=4096 IPs per subnet.
+  private_subnets         = ["10.0.0.0/20", "10.0.16.0/20", "10.0.32.0/20"]
+  public_subnets          = ["10.0.48.0/20", "10.0.64.0/20", "10.0.80.0/20"]
+  enable_nat_gateway      = true
+  single_nat_gateway      = true
+  enable_dns_hostnames    = true
+  map_public_ip_on_launch = true
+
+  tags = {
+    created-by                                        = "terraform"
+    "kubernetes.io/cluster/${local.k8s_cluster_name}" = "shared"
+  }
+
+  public_subnet_tags = {
+    "kubernetes.io/cluster/${local.k8s_cluster_name}" = "shared"
+    "kubernetes.io/role/elb"                          = "1"
+  }
+
+  private_subnet_tags = {
+    "kubernetes.io/cluster/${local.k8s_cluster_name}" = "shared"
+    "kubernetes.io/role/internal-elb"                 = "1"
+  }
+}
+```
+
+## Network Architecture
+
+### CIDR Block Design
+
+**Main VPC CIDR:** `10.0.0.0/16` (65,536 IP addresses)
+
+**Private Subnets** (for EKS nodes and internal resources):
+- `10.0.0.0/20` - 4,096 IPs
+- `10.0.16.0/20` - 4,096 IPs
+- `10.0.32.0/20` - 4,096 IPs
+- **Total:** 12,288 private IPs
+
+**Public Subnets** (for load balancers and NAT gateway):
+- `10.0.48.0/20` - 4,096 IPs
+- `10.0.64.0/20` - 4,096 IPs
+- `10.0.80.0/20` - 4,096 IPs
+- **Total:** 12,288 public IPs
+
+### Availability Zones
+
+Subnets are distributed across all available AWS availability zones in the region:
+
+```hcl
+data "aws_availability_zones" "available" {}
+```
+
+This provides high availability and fault tolerance by spreading resources across multiple data centers.
+
+## VPC Features
+
+### NAT Gateway
+
+**Configuration:**
+```hcl
+enable_nat_gateway = true
+single_nat_gateway = true
+```
+
+A single NAT gateway is deployed to allow private subnet resources to access the internet for outbound connections (software updates, external API calls, etc.) while remaining protected from inbound internet traffic.
+
+**Cost consideration:** Using a single NAT gateway reduces costs but creates a single point of failure. For production workloads requiring higher availability, consider `one_nat_gateway_per_az = true`.
+
+### DNS Configuration
+
+**Hostname support:**
+```hcl
+enable_dns_hostnames = true
+```
+
+Enables DNS hostname resolution for EC2 instances, allowing them to receive public DNS hostnames.
+
+**Public IP assignment:**
+```hcl
+map_public_ip_on_launch = true
+```
+
+Automatically assigns public IP addresses to instances launched in public subnets.
+
+## EKS Integration
+
+### Cluster Tags
+
+The VPC and subnets are tagged for EKS cluster integration:
+
+**VPC-level tag:**
+```hcl
+"kubernetes.io/cluster/${local.k8s_cluster_name}" = "shared"
+```
+
+Indicates the VPC is shared by the EKS cluster.
+
+### Subnet Tags
+
+**Public subnets** (for external load balancers):
+```hcl
+public_subnet_tags = {
+  "kubernetes.io/cluster/${local.k8s_cluster_name}" = "shared"
+  "kubernetes.io/role/elb"                          = "1"
+}
+```
+
+The `kubernetes.io/role/elb` tag allows Kubernetes to automatically discover public subnets for creating internet-facing load balancers.
+
+**Private subnets** (for internal load balancers):
+```hcl
+private_subnet_tags = {
+  "kubernetes.io/cluster/${local.k8s_cluster_name}" = "shared"
+  "kubernetes.io/role/internal-elb"                 = "1"
+}
+```
+
+The `kubernetes.io/role/internal-elb` tag allows Kubernetes to automatically discover private subnets for creating internal load balancers.
+
+## Configuration Parameters
+
+<ParamField path="name" type="string" default="vpc">
+  Name of the VPC
+</ParamField>
+
+<ParamField path="cidr" type="string" default="10.0.0.0/16">
+  CIDR block for the VPC (65,536 IP addresses)
+</ParamField>
+
+<ParamField path="azs" type="list(string)" required>
+  List of availability zones (auto-detected from region)
+</ParamField>
+
+<ParamField path="private_subnets" type="list(string)" required>
+  CIDR blocks for private subnets (3 subnets with 4,096 IPs each)
+</ParamField>
+
+<ParamField path="public_subnets" type="list(string)" required>
+  CIDR blocks for public subnets (3 subnets with 4,096 IPs each)
+</ParamField>
+
+<ParamField path="enable_nat_gateway" type="bool" default="true">
+  Enable NAT gateway for private subnet internet access
+</ParamField>
+
+<ParamField path="single_nat_gateway" type="bool" default="true">
+  Use a single NAT gateway instead of one per AZ (cost optimization)
+</ParamField>
+
+<ParamField path="enable_dns_hostnames" type="bool" default="true">
+  Enable DNS hostname support in the VPC
+</ParamField>
+
+<ParamField path="map_public_ip_on_launch" type="bool" default="true">
+  Auto-assign public IPs to instances in public subnets
+</ParamField>
+
+## Dependencies
+
+This VPC module has no dependencies and is typically one of the first resources created. It provides networking infrastructure for:
+
+- **EKS Module** (`eks.tf`): Uses private subnets for node groups
+- **RDS Module** (`rds.tf`): Uses public subnets for database instances
+- **Vault Module** (`vault.tf`): Uses public subnets for Vault instances and load balancers
+
+## Outputs
+
+- `vpc_id`: The VPC identifier
+- `private_subnets`: List of private subnet IDs
+- `public_subnets`: List of public subnet IDs
+- `nat_gateway_ids`: List of NAT gateway IDs
+- `vpc_cidr_block`: The VPC CIDR block

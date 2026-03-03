@@ -1,0 +1,35 @@
+---
+title: Overview
+description: Kraken is a CDK library that provides construct abstractions for cdkactions, built specifically for Penn Labs projects
+---
+
+# Kraken Overview
+
+Kraken is a CDK library for [cdkactions](https://github.com/ArmaanT/cdkactions/) that provides high-level construct abstractions built specifically for Penn Labs infrastructure and CI/CD workflows.
+
+## What is Kraken?
+
+Kraken is a wrapper around cdkactions that simplifies the creation and management of GitHub Actions workflows using the AWS CDK approach. Instead of writing YAML configuration files, you can define your CI/CD pipelines using TypeScript with familiar construct patterns.
+
+## Key Features
+
+- **Pre-built constructs** for common Penn Labs project patterns
+- **LabsApplicationStack** for standard Django + React projects
+- **DjangoProject** and **ReactProject** constructs for flexible configurations
+- **Automated CI/CD** with linting, testing, building, and deployment
+- **Docker image publishing** with standardized naming conventions
+- **Type-safe workflow definitions** using TypeScript
+- **Reusable components** across multiple projects
+
+## Use Cases
+
+Kraken is ideal for:
+
+- Penn Labs projects following the Django backend + React frontend pattern
+- Projects requiring custom CI/CD workflows with multiple services
+- Teams wanting type-safe, programmatic workflow definitions
+- Applications needing automated testing, building, and deployment
+
+## Learn More
+
+For detailed API documentation and examples, visit [kraken.pennlabs.org](https://kraken.pennlabs.org).

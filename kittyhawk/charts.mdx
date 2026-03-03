@@ -1,0 +1,77 @@
+---
+title: 'PennLabsChart'
+description: 'Base chart construct for Kittyhawk Kubernetes applications'
+---
+
+## Overview
+
+`PennLabsChart` is the foundational chart class that extends CDK8s's `Chart` construct. It automatically configures standard Kubernetes labels and metadata for Penn Labs applications.
+
+## Class Definition
+
+```typescript
+export class PennLabsChart extends Chart {
+  constructor(scope: Construct, name?: string, props?: ChartProps)
+}
+```
+
+## Constructor Parameters
+
+<ParamField path="scope" type="Construct" required>
+  The parent construct (typically an App instance)
+</ParamField>
+
+<ParamField path="name" type="string" default="pennlabs">
+  The name of the chart
+</ParamField>
+
+<ParamField path="props" type="ChartProps">
+  Chart configuration properties
+  
+  <ParamField path="namespace" type="string">
+    Kubernetes namespace for the chart resources
+  </ParamField>
+  
+  <ParamField path="labels" type="Record<string, string>">
+    Additional labels to merge with default labels
+  </ParamField>
+</ParamField>
+
+## Automatic Labels
+
+PennLabsChart automatically applies the following labels to all resources:
+
+- **app.kubernetes.io/part-of**: Set from `RELEASE_NAME` environment variable (defaults to "undefined_release")
+- **app.kubernetes.io/version**: Set from required `GIT_SHA` environment variable
+- **app.kubernetes.io/managed-by**: Always set to "kittyhawk"
+
+## Environment Variables
+
+<ParamField path="GIT_SHA" type="string" required>
+  Git commit SHA for versioning. **Required** - the chart will exit if not provided.
+</ParamField>
+
+<ParamField path="RELEASE_NAME" type="string" default="undefined_release">
+  Name of the release for the `app.kubernetes.io/part-of` label
+</ParamField>
+
+## Usage Example
+
+```typescript
+import { App } from 'cdk8s';
+import { PennLabsChart } from './chart';
+
+const app = new App();
+
+const chart = new PennLabsChart(app, 'my-app', {
+  namespace: 'production',
+  labels: {
+    'team': 'platform',
+    'environment': 'prod'
+  }
+});
+```
+
+## Source Reference
+
+Defined in `src/chart.ts:4`

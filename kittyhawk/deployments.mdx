@@ -1,0 +1,263 @@
+---
+title: 'Deployments'
+description: 'Kubernetes Deployment construct for managing application replicas'
+---
+
+## Overview
+
+The `Deployment` construct creates a Kubernetes Deployment with rolling update strategy, volume mounts, and service account support.
+
+## Class Definition
+
+```typescript
+export class Deployment extends Construct {
+  constructor(scope: Construct, appname: string, props: DeploymentProps)
+}
+```
+
+## Constructor Parameters
+
+<ParamField path="scope" type="Construct" required>
+  Parent construct
+</ParamField>
+
+<ParamField path="appname" type="string" required>
+  Application name for labels and metadata
+</ParamField>
+
+<ParamField path="props" type="DeploymentProps" required>
+  Deployment configuration properties
+</ParamField>
+
+## DeploymentProps
+
+Extends `ContainerProps` with deployment-specific options.
+
+### Container Properties
+
+<ParamField path="image" type="string" required>
+  Docker image name (without tag)
+</ParamField>
+
+<ParamField path="tag" type="string" default="GIT_SHA env var">
+  Docker image tag. Defaults to `GIT_SHA` environment variable.
+</ParamField>
+
+<ParamField path="port" type="number" default="80">
+  External port for the service
+</ParamField>
+
+<ParamField path="containerPort" type="number" default="port">
+  Internal container port. Defaults to the value of `port`.
+</ParamField>
+
+<ParamField path="secret" type="string">
+  Name of Kubernetes secret to mount as environment variables
+</ParamField>
+
+<ParamField path="cmd" type="string[]">
+  Container command (entrypoint)
+  
+  ```typescript
+  cmd: ['gunicorn', 'app.wsgi:application', '--bind', '0.0.0.0:8000']
+  ```
+</ParamField>
+
+<ParamField path="env" type="Array<{name: string, value: string}>">
+  Additional environment variables
+  
+  ```typescript
+  env: [
+    { name: 'LOG_LEVEL', value: 'INFO' },
+    { name: 'ENVIRONMENT', value: 'production' }
+  ]
+  ```
+  
+  Note: `GIT_SHA` is automatically added to all containers.
+</ParamField>
+
+<ParamField path="pullPolicy" type="'IfNotPresent' | 'Always' | 'Never'" default="IfNotPresent">
+  Container image pull policy
+</ParamField>
+
+### Deployment-Specific Properties
+
+<ParamField path="replicas" type="number" default="1">
+  Number of pod replicas to run
+</ParamField>
+
+<ParamField path="secretMounts" type="VolumeMount[]">
+  Secret volume mounts for the container
+  
+  ```typescript
+  secretMounts: [
+    {
+      name: 'app-secrets',
+      mountPath: '/etc/secrets',
+      subPath: 'config.json'
+    }
+  ]
+  ```
+</ParamField>
+
+<ParamField path="volumeMounts" type="VolumeMount[]">
+  Additional volume mounts (appends to secretMounts)
+  
+  ```typescript
+  volumeMounts: [
+    {
+      name: 'config-volume',
+      mountPath: '/etc/config'
+    }
+  ]
+  ```
+</ParamField>
+
+<ParamField path="volumes" type="Volume[]">
+  Volume definitions for the pod
+  
+  ```typescript
+  volumes: [
+    {
+      name: 'config-volume',
+      configMap: {
+        name: 'app-config'
+      }
+    }
+  ]
+  ```
+</ParamField>
+
+<ParamField path="serviceAccount" type="KubeServiceAccount">
+  Service account to attach to deployment pods. If not provided, uses default service account.
+</ParamField>
+
+## Deployment Strategy
+
+All deployments use a **RollingUpdate** strategy with:
+- **maxSurge**: 3 (can create up to 3 extra pods during update)
+- **maxUnavailable**: 0 (always maintain full availability)
+
+This ensures zero-downtime deployments.
+
+## Labels
+
+Each deployment automatically applies the label:
+```yaml
+app.kubernetes.io/name: <appname>
+```
+
+This label is used for pod selection and service matching.
+
+## Usage Examples
+
+### Basic Deployment
+
+```typescript
+import { Deployment } from './deployment';
+
+new Deployment(chart, 'api', {
+  image: 'pennlabs/api',
+  replicas: 3,
+  port: 8000
+});
+```
+
+### With Secrets
+
+```typescript
+new Deployment(chart, 'backend', {
+  image: 'pennlabs/backend',
+  replicas: 2,
+  secret: 'backend-secrets',  // Mounted as environment variables
+  secretMounts: [             // Mounted as files
+    {
+      name: 'db-credentials',
+      mountPath: '/etc/secrets',
+      subPath: 'credentials.json'
+    }
+  ]
+});
+```
+
+### With Custom Command
+
+```typescript
+new Deployment(chart, 'worker', {
+  image: 'pennlabs/app',
+  cmd: ['celery', '-A', 'app', 'worker', '--loglevel=info'],
+  replicas: 4,
+  secret: 'app-secrets'
+});
+```
+
+### With Service Account
+
+```typescript
+import { KubeServiceAccount } from './imports/k8s';
+
+const serviceAccount = new KubeServiceAccount(chart, 'my-sa', {
+  metadata: { name: 'my-app-sa' }
+});
+
+new Deployment(chart, 'api', {
+  image: 'pennlabs/api',
+  replicas: 2,
+  serviceAccount: serviceAccount
+});
+```
+
+### With ConfigMap Volumes
+
+```typescript
+new Deployment(chart, 'app', {
+  image: 'pennlabs/app',
+  replicas: 2,
+  volumeMounts: [
+    {
+      name: 'config',
+      mountPath: '/etc/app/config'
+    }
+  ],
+  volumes: [
+    {
+      name: 'config',
+      configMap: {
+        name: 'app-config'
+      }
+    }
+  ]
+});
+```
+
+### High Availability Setup
+
+```typescript
+new Deployment(chart, 'api', {
+  image: 'pennlabs/api',
+  tag: 'v2.1.0',
+  replicas: 5,
+  port: 8000,
+  env: [
+    { name: 'LOG_LEVEL', value: 'INFO' },
+    { name: 'WORKERS', value: '4' }
+  ],
+  pullPolicy: 'Always'
+});
+```
+
+## Container Naming
+
+All containers are named `worker` by default (see `src/container.ts:162`).
+
+## Environment Variables
+
+Required environment variable:
+
+<ParamField path="GIT_SHA" type="string" required>
+  Git commit SHA. Automatically injected into all containers and used as default image tag.
+</ParamField>
+
+## Source Reference
+
+Defined in `src/deployment.ts:48`

@@ -1,0 +1,45 @@
+---
+title: Shibboleth SP with Nginx
+description: Docker image containing Shibboleth Service Provider running behind Nginx
+---
+
+[![Docker Pulls](https://img.shields.io/docker/pulls/pennlabs/shibboleth-sp-nginx)](https://hub.docker.com/r/pennlabs/shibboleth-sp-nginx)
+
+This Docker image contains Nginx with Shibboleth SP 3.0.4 running on Debian Buster (Slim). The image is built following [nginx-http-shibboleth instructions](https://github.com/nginx-shib/nginx-http-shibboleth).
+
+## Purpose
+
+This image is meant to be used as a base image for applications that require Shibboleth authentication. Local configuration files override the default configs.
+
+## Features
+
+- **Nginx** web server pre-configured for Shibboleth
+- **Shibboleth SP 3.0.4** for SAML-based authentication
+- **Exposed Ports**: 80 (HTTP) and 443 (HTTPS)
+- Built on Debian Buster (Slim) for a lightweight footprint
+
+## Usage as a Base Image
+
+To use this image as a base, add your custom Shibboleth and Nginx configuration:
+
+```Dockerfile
+FROM pennlabs/shibboleth-sp-nginx
+
+COPY shibboleth/ /etc/shibboleth/
+COPY nginx/ /etc/nginx/conf.d/
+```
+
+Where:
+- `shibboleth/` contains your custom Shibboleth configuration files (e.g., `shibboleth2.xml`)
+- `nginx/` contains your custom Nginx configuration files (e.g., `default.conf`)
+
+<Warning>
+When using this image as a base, you **must** generate a new TLS certificate and key for Nginx (`cert.pem` and `key.pem`). Copy them to `/etc/nginx/`.
+</Warning>
+
+## Security Considerations
+
+- Always generate fresh TLS certificates for production use
+- Never commit certificates or private keys to version control
+- Configure `shibboleth2.xml` with your Identity Provider (IdP) metadata
+- Ensure proper access controls in Nginx configuration

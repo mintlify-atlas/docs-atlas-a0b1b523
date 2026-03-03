@@ -1,0 +1,259 @@
+---
+title: 'CronJobs'
+description: 'Kubernetes CronJob construct for scheduled tasks'
+---
+
+## Overview
+
+The `CronJob` construct creates a Kubernetes CronJob for running scheduled tasks with configurable history limits and restart policies.
+
+## Class Definition
+
+```typescript
+export class CronJob extends Construct {
+  constructor(scope: Construct, jobname: string, props: CronJobProps)
+}
+```
+
+## Constructor Parameters
+
+<ParamField path="scope" type="Construct" required>
+  Parent construct
+</ParamField>
+
+<ParamField path="jobname" type="string" required>
+  Job name (will be prefixed with release name)
+</ParamField>
+
+<ParamField path="props" type="CronJobProps" required>
+  CronJob configuration properties
+</ParamField>
+
+## CronJobProps
+
+Extends `ContainerProps` with cron-specific options.
+
+### Container Properties
+
+<ParamField path="image" type="string" required>
+  Docker image name (without tag)
+</ParamField>
+
+<ParamField path="tag" type="string" default="GIT_SHA env var">
+  Docker image tag. Defaults to `GIT_SHA` environment variable.
+</ParamField>
+
+<ParamField path="secret" type="string">
+  Name of Kubernetes secret to mount as environment variables
+</ParamField>
+
+<ParamField path="cmd" type="string[]">
+  Container command to execute
+  
+  ```typescript
+  cmd: ['python', 'manage.py', 'cleanup_old_data']
+  ```
+</ParamField>
+
+<ParamField path="env" type="Array<{name: string, value: string}>">
+  Additional environment variables
+  
+  ```typescript
+  env: [
+    { name: 'CLEANUP_DAYS', value: '30' }
+  ]
+  ```
+</ParamField>
+
+<ParamField path="pullPolicy" type="'IfNotPresent' | 'Always' | 'Never'" default="IfNotPresent">
+  Container image pull policy
+</ParamField>
+
+### CronJob-Specific Properties
+
+<ParamField path="schedule" type="string" required>
+  Cron schedule expression
+  
+  ```typescript
+  schedule: '0 2 * * *'  // Every day at 2 AM
+  schedule: '*/15 * * * *'  // Every 15 minutes
+  schedule: '0 0 * * 0'  // Every Sunday at midnight
+  ```
+</ParamField>
+
+<ParamField path="restartPolicy" type="'Always' | 'OnFailure' | 'Never'" default="Never">
+  Restart policy for the job container
+  
+  - `Never`: Don't restart on failure (default)
+  - `OnFailure`: Restart only if the container fails
+  - `Always`: Always restart the container
+</ParamField>
+
+<ParamField path="successLimit" type="number" default="1">
+  Number of successful finished jobs to retain in history
+</ParamField>
+
+<ParamField path="failureLimit" type="number" default="1">
+  Number of failed jobs to retain in history
+</ParamField>
+
+<ParamField path="secretMounts" type="Array<{name: string, mountPath: string, subPath: string}>">
+  Secret volume mounts for the cronjob container
+  
+  ```typescript
+  secretMounts: [
+    {
+      name: 'backup-credentials',
+      mountPath: '/etc/secrets',
+      subPath: 'credentials.json'
+    }
+  ]
+  ```
+</ParamField>
+
+<ParamField path="createServiceAccount" type="boolean" default="false">
+  Creates and attaches a service account to job pods. Service account name is set to the release name.
+</ParamField>
+
+## Naming Convention
+
+CronJob names are automatically prefixed with the release name:
+```
+${RELEASE_NAME}-${jobname}
+```
+
+For example, if `RELEASE_NAME=myapp` and `jobname=cleanup`, the final name is `myapp-cleanup`.
+
+## Labels
+
+Each cronjob automatically applies the label:
+```yaml
+app.kubernetes.io/name: <RELEASE_NAME>-<jobname>
+```
+
+## Container Ports
+
+CronJobs are created with `noContainerPorts: true`, meaning no container ports are exposed (see `src/cronjob.ts:65`).
+
+## Usage Examples
+
+### Daily Backup Job
+
+```typescript
+import { CronJob } from './cronjob';
+
+new CronJob(chart, 'backup', {
+  image: 'pennlabs/backup-tool',
+  schedule: '0 2 * * *',  // 2 AM daily
+  cmd: ['./backup.sh'],
+  secret: 'backup-secrets',
+  restartPolicy: 'OnFailure',
+  successLimit: 7,  // Keep last 7 successful runs
+  failureLimit: 3   // Keep last 3 failed runs
+});
+```
+
+### Database Cleanup
+
+```typescript
+new CronJob(chart, 'cleanup', {
+  image: 'pennlabs/backend',
+  schedule: '0 0 * * 0',  // Weekly on Sunday
+  cmd: ['python', 'manage.py', 'cleanup_old_records'],
+  secret: 'db-secrets',
+  env: [
+    { name: 'DJANGO_SETTINGS_MODULE', value: 'app.settings.production' },
+    { name: 'CLEANUP_DAYS', value: '90' }
+  ]
+});
+```
+
+### Data Sync Job
+
+```typescript
+new CronJob(chart, 'sync', {
+  image: 'pennlabs/sync-service',
+  schedule: '*/30 * * * *',  // Every 30 minutes
+  cmd: ['./sync.sh'],
+  secretMounts: [
+    {
+      name: 'api-credentials',
+      mountPath: '/etc/credentials',
+      subPath: 'api-key.json'
+    }
+  ],
+  restartPolicy: 'Never',
+  successLimit: 10,
+  failureLimit: 5
+});
+```
+
+### Report Generation with Service Account
+
+```typescript
+new CronJob(chart, 'reports', {
+  image: 'pennlabs/reporting',
+  schedule: '0 9 1 * *',  // 9 AM on first day of month
+  cmd: ['python', 'generate_reports.py'],
+  secret: 'report-secrets',
+  createServiceAccount: true,  // Needs K8s API access
+  restartPolicy: 'OnFailure',
+  env: [
+    { name: 'REPORT_TYPE', value: 'monthly' },
+    { name: 'OUTPUT_FORMAT', value: 'pdf' }
+  ]
+});
+```
+
+### Cache Warming
+
+```typescript
+new CronJob(chart, 'cache-warmer', {
+  image: 'pennlabs/cache-tool',
+  schedule: '0 */4 * * *',  // Every 4 hours
+  cmd: ['./warm-cache.sh'],
+  secret: 'cache-secrets',
+  restartPolicy: 'Never',
+  successLimit: 3,
+  failureLimit: 2,
+  pullPolicy: 'Always'
+});
+```
+
+## Cron Schedule Format
+
+The schedule follows standard cron format:
+```
+┌───────────── minute (0 - 59)
+│ ┌───────────── hour (0 - 23)
+│ │ ┌───────────── day of month (1 - 31)
+│ │ │ ┌───────────── month (1 - 12)
+│ │ │ │ ┌───────────── day of week (0 - 6) (Sunday to Saturday)
+│ │ │ │ │
+│ │ │ │ │
+* * * * *
+```
+
+### Common Examples:
+
+- `0 0 * * *` - Daily at midnight
+- `0 */6 * * *` - Every 6 hours
+- `*/15 * * * *` - Every 15 minutes
+- `0 9 * * 1-5` - 9 AM on weekdays
+- `0 0 1 * *` - First day of every month
+
+## Environment Variables
+
+Required environment variables:
+
+<ParamField path="GIT_SHA" type="string" required>
+  Git commit SHA. Automatically injected into container and used as default image tag.
+</ParamField>
+
+<ParamField path="RELEASE_NAME" type="string" default="undefined_release">
+  Release name used for prefixing cronjob names and service account names.
+</ParamField>
+
+## Source Reference
+
+Defined in `src/cronjob.ts:55`

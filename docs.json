@@ -1,122 +1,187 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Penn Labs Infrastructure",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#011F5B",
+    "light": "#82AAFF",
+    "dark": "#990000"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/pennlabs/infrastructure"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/pennlabs/infrastructure"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Overview",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Getting Started",
             "pages": [
-              "index",
-              "quickstart",
-              "development"
-            ]
-          },
-          {
-            "group": "Customization",
-            "pages": [
-              "essentials/settings",
-              "essentials/navigation"
-            ]
-          },
-          {
-            "group": "Writing content",
-            "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
-            ]
-          },
-          {
-            "group": "AI tools",
-            "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "introduction",
+              "architecture"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "Terraform",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Setup",
             "pages": [
-              "api-reference/introduction"
+              "terraform/overview",
+              "terraform/bootstrapping"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Infrastructure Components",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "terraform/eks",
+              "terraform/rds",
+              "terraform/vpc",
+              "terraform/vault",
+              "terraform/iam"
+            ]
+          },
+          {
+            "group": "Modules",
+            "pages": [
+              "terraform/modules/base-cluster",
+              "terraform/modules/domain",
+              "terraform/modules/iam-module",
+              "terraform/modules/vault-module"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Kittyhawk",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "kittyhawk/overview",
+              "kittyhawk/installation",
+              "kittyhawk/quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "kittyhawk/charts",
+              "kittyhawk/applications",
+              "kittyhawk/deployments",
+              "kittyhawk/cronjobs"
+            ]
+          },
+          {
+            "group": "Components",
+            "pages": [
+              "kittyhawk/django-application",
+              "kittyhawk/react-application",
+              "kittyhawk/redis-application",
+              "kittyhawk/ingress",
+              "kittyhawk/certificates"
+            ]
+          },
+          {
+            "group": "CI Integration",
+            "pages": [
+              "kittyhawk/github-actions",
+              "kittyhawk/yaml-generation"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Kraken",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "kraken/overview",
+              "kraken/installation",
+              "kraken/quickstart"
+            ]
+          },
+          {
+            "group": "Workflows",
+            "pages": [
+              "kraken/labs-application-stack",
+              "kraken/django-project",
+              "kraken/react-project",
+              "kraken/deploy-job"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "kraken/custom-workflows",
+              "kraken/docker-builds",
+              "kraken/integration-tests"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Docker",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "docker/overview"
+            ]
+          },
+          {
+            "group": "Images",
+            "pages": [
+              "docker/django-base",
+              "docker/waypoint",
+              "docker/pg-s3-backup",
+              "docker/shibboleth-sp-nginx",
+              "docker/team-sync"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Operations",
+        "groups": [
+          {
+            "group": "Deployment",
+            "pages": [
+              "operations/deployment-guide",
+              "operations/secrets-management",
+              "operations/rollbacks"
+            ]
+          },
+          {
+            "group": "Monitoring",
+            "pages": [
+              "operations/grafana-dashboards",
+              "operations/alerting",
+              "operations/logging"
+            ]
+          },
+          {
+            "group": "Maintenance",
+            "pages": [
+              "operations/database-backups",
+              "operations/certificate-renewal",
+              "operations/cluster-upgrades"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

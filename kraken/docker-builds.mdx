@@ -1,0 +1,269 @@
+---
+title: Docker Builds
+description: Learn how to configure Docker build and publish jobs in Kraken workflows
+---
+
+Kraken provides the `DockerPublishJob` class to build and publish Docker images to Docker Hub as part of your CI/CD pipeline.
+
+## Basic Usage
+
+The `DockerPublishJob` creates a job that builds a Docker image and optionally publishes it to Docker Hub (docker.ts:72):
+
+```typescript
+import { Workflow } from 'cdkactions';
+import { DockerPublishJob } from '@pennlabs/kraken';
+
+const workflow = new Workflow(this, 'workflow', {
+  name: 'Build',
+  on: 'push',
+});
+
+new DockerPublishJob(
+  workflow,
+  'backend',
+  {
+    imageName: 'my-app-backend',
+  }
+);
+```
+
+## Configuration Options
+
+The `DockerPublishJob` accepts several configuration options (docker.ts:7-67):
+
+### Image Name (Required)
+
+```typescript
+{
+  imageName: 'my-app-backend',  // Published as pennlabs/my-app-backend
+}
+```
+
+### Docker Context and Dockerfile
+
+```typescript
+{
+  imageName: 'my-app',
+  path: './backend',              // Docker context path (default: ".")
+  dockerfile: 'Dockerfile.prod',  // Dockerfile name (default: "Dockerfile")
+}
+```
+
+The full Dockerfile path is `{path}/{dockerfile}` (docker.ts:114).
+
+### Push Condition
+
+Control when images are pushed to Docker Hub:
+
+```typescript
+{
+  imageName: 'my-app',
+  push: "${{ github.ref == 'refs/heads/master' }}",  // Default: only push on master
+}
+```
+
+Other examples:
+
+```typescript
+// Push on production branch
+push: "${{ github.ref == 'refs/heads/production' }}"
+
+// Push on any tag
+push: "${{ startsWith(github.ref, 'refs/tags/') }}"
+
+// Always push
+push: "true"
+```
+
+### Image Tags
+
+Specify which tags to apply to the built image (docker.ts:35):
+
+```typescript
+{
+  imageName: 'my-app',
+  tags: 'latest,${{ github.sha }}',  // Default: latest and git SHA
+}
+```
+
+The tags string is split by commas and each tag is prefixed with the full image name (docker.ts:132-137):
+
+```typescript
+// Input: tags: 'latest,v1.0,${{ github.sha }}'
+// Output:
+//   pennlabs/my-app:latest
+//   pennlabs/my-app:v1.0
+//   pennlabs/my-app:<sha>
+```
+
+### Build Arguments
+
+Pass build arguments to the Docker build:
+
+```typescript
+{
+  imageName: 'my-app',
+  buildArgs: {
+    NODE_ENV: 'production',
+    API_URL: 'https://api.example.com',
+  },
+}
+```
+
+Build arguments are formatted as comma-separated key=value pairs (docker.ts:119-123).
+
+### Docker Hub Authentication
+
+By default, the job uses GitHub secrets for authentication (docker.ts:40-47):
+
+```typescript
+{
+  imageName: 'my-app',
+  username: '${{ secrets.DOCKER_USERNAME }}',  // Default
+  password: '${{ secrets.DOCKER_PASSWORD }}',  // Default
+}
+```
+
+You can override these if using different secret names:
+
+```typescript
+{
+  imageName: 'my-app',
+  username: '${{ secrets.DOCKERHUB_USER }}',
+  password: '${{ secrets.DOCKERHUB_TOKEN }}',
+}
+```
+
+### Caching
+
+Docker layer caching is enabled by default (docker.ts:53):
+
+```typescript
+{
+  imageName: 'my-app',
+  cache: true,  // Default: uses latest image tag for cache
+}
+```
+
+The job caches from both local buildx cache and the latest registry image (docker.ts:125-129):
+
+```typescript
+cache-from: type=local,src=/tmp/.buildx-cache,type=registry,ref=pennlabs/my-app:latest
+cache-to: type=local,dest=/tmp/.buildx-cache
+```
+
+Disable caching:
+
+```typescript
+{
+  imageName: 'my-app',
+  cache: false,  // Only uses local buildx cache
+}
+```
+
+### Build Without Publishing
+
+Build the image and upload it as an artifact instead of publishing to Docker Hub (docker.ts:60):
+
+```typescript
+{
+  imageName: 'my-app',
+  noPublish: true,
+}
+```
+
+This is useful for integration testing. The image is saved to `/tmp/image.tar` and uploaded as an artifact (docker.ts:170-180).
+
+## Image Naming Convention
+
+All images are published under the `pennlabs` organization (docker.ts:111):
+
+```typescript
+const imageName = `pennlabs/${config.imageName}`;
+```
+
+Examples:
+- `imageName: 'backend'` → `pennlabs/backend:latest`
+- `imageName: 'my-app-frontend'` → `pennlabs/my-app-frontend:latest`
+- `imageName: 'api-v2'` → `pennlabs/api-v2:latest`
+
+## Complete Example
+
+```typescript
+import { Workflow } from 'cdkactions';
+import { DockerPublishJob } from '@pennlabs/kraken';
+
+const workflow = new Workflow(this, 'workflow', {
+  name: 'Build and Publish',
+  on: 'push',
+});
+
+// Backend API
+const backend = new DockerPublishJob(
+  workflow,
+  'backend',
+  {
+    imageName: 'myapp-backend',
+    path: './backend',
+    dockerfile: 'Dockerfile',
+    tags: 'latest,${{ github.sha }}',
+    buildArgs: {
+      DJANGO_SETTINGS_MODULE: 'myapp.settings.production',
+    },
+    cache: true,
+  }
+);
+
+// Frontend with custom push condition
+new DockerPublishJob(
+  workflow,
+  'frontend',
+  {
+    imageName: 'myapp-frontend',
+    path: './frontend',
+    tags: 'latest,${{ github.sha }},v1.0',
+    push: "${{ github.ref == 'refs/heads/production' }}",
+    buildArgs: {
+      NODE_ENV: 'production',
+      REACT_APP_API_URL: 'https://api.myapp.com',
+    },
+  },
+  {
+    // Job overrides
+    needs: backend.id,  // Wait for backend to build first
+  }
+);
+```
+
+## Using with Project Classes
+
+The `DjangoProject` and `ReactProject` classes use `DockerPublishJob` internally. You can customize the Docker build through the `publishProps` parameter:
+
+```typescript
+import { DjangoProject } from '@pennlabs/kraken';
+
+const django = new DjangoProject(workflow, {
+  projectName: 'myapi',
+  path: 'backend',
+  imageName: 'myapp-backend',
+  publishProps: {
+    dockerfile: 'Dockerfile.production',
+    buildArgs: {
+      PYTHON_VERSION: '3.11',
+    },
+    tags: 'latest,stable,${{ github.sha }}',
+  },
+});
+```
+
+## Accessing Build Information
+
+The `DockerPublishJob` exposes the full Docker image name (docker.ts:76):
+
+```typescript
+const publishJob = new DockerPublishJob(workflow, 'backend', {
+  imageName: 'my-app',
+});
+
+console.log(publishJob.dockerImageName);  // "pennlabs/my-app"
+```

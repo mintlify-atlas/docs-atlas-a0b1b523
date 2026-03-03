@@ -1,0 +1,220 @@
+---
+title: Vault Module
+description: Configures HashiCorp Vault with secrets management, authentication backends, and policy-based access control
+---
+
+The `vault` module configures HashiCorp Vault with KV secrets storage, GitHub and AWS authentication backends, team-based access policies, and integrations for secret synchronization and Grafana.
+
+## Overview
+
+This module provisions:
+
+- KV v2 secrets engine for storing application secrets
+- GitHub authentication backend with team-based access
+- AWS authentication backend for service accounts
+- Vault policies for admin, secret-sync, and team-sync roles
+- Grafana secrets configuration with OAuth integration
+- IAM role bindings for Kubernetes service accounts
+
+## Input Variables
+
+<ParamField path="GF_GH_CLIENT_ID" type="string" required>
+  GitHub Client ID for the Penn Labs Grafana OAuth2 Application. Used to configure Grafana's GitHub authentication.
+</ParamField>
+
+<ParamField path="GF_GH_CLIENT_SECRET" type="string" required>
+  GitHub Client Secret for the Penn Labs Grafana OAuth2 Application. Stored securely in Vault for Grafana to authenticate users.
+</ParamField>
+
+<ParamField path="GF_SLACK_URL" type="string" required>
+  Slack notification URL used for Grafana notifications. Enables Grafana to send alerts to Slack channels.
+</ParamField>
+
+<ParamField path="SECRET_SYNC_ARN" type="string" required>
+  Role ARN for the secret-sync service account. This IAM role is used to authenticate the secret synchronization service with Vault via AWS auth.
+</ParamField>
+
+<ParamField path="TEAM_SYNC_ARN" type="string" required>
+  Role ARN for the team-sync service account. This IAM role is used to authenticate the team synchronization service with Vault via AWS auth.
+</ParamField>
+
+## Outputs
+
+<ParamField path="secrets-path" type="string">
+  The mount path of the KV secrets engine. Use this path to reference secrets stored in Vault (e.g., `secrets/production/app-name`).
+</ParamField>
+
+## Resources Provisioned
+
+### Secrets Engine
+
+```hcl
+resource "vault_mount" "secrets" {
+  path        = "secrets"
+  type        = "kv-v2"
+  description = "Secrets backend"
+}
+```
+
+Creates a KV version 2 secrets engine at the path `secrets/`. KV v2 provides versioning and metadata for all secrets.
+
+### Authentication Backends
+
+#### AWS Authentication
+
+```hcl
+resource "vault_auth_backend" "aws" {
+  type = "aws"
+}
+```
+
+Enables AWS authentication, allowing IAM roles to authenticate with Vault.
+
+#### GitHub Authentication
+
+```hcl
+resource "vault_github_auth_backend" "pennlabs" {
+  organization = "pennlabs"
+}
+
+resource "vault_github_team" "sre" {
+  backend  = vault_github_auth_backend.pennlabs.id
+  team     = "sre"
+  policies = [vault_policy.admin.name]
+}
+```
+
+Configures GitHub authentication for the `pennlabs` organization and maps the `sre` team to admin policies.
+
+### Policies
+
+#### Admin Policy
+
+```hcl
+resource "vault_policy" "admin" {
+  name = "admin"
+  policy = templatefile("${path.module}/policies/admin.hcl", {
+    PATH = vault_mount.secrets.path
+  })
+}
+```
+
+Creates an admin policy from a template file, granting full access to the secrets path.
+
+#### Secret Sync Policy
+
+```hcl
+resource "vault_policy" "secret-sync" {
+  name = "secret-sync"
+  policy = templatefile("${path.module}/policies/secret-sync.hcl", {
+    PATH = vault_mount.secrets.path
+  })
+}
+
+resource "vault_aws_auth_backend_role" "secret-sync" {
+  role                     = "secret-sync"
+  bound_iam_principal_arns = [var.SECRET_SYNC_ARN]
+  token_policies           = [vault_policy.secret-sync.name]
+}
+```
+
+Creates a policy and AWS auth role for the secret synchronization service, binding the IAM role ARN to the Vault policy.
+
+#### Team Sync Policy
+
+```hcl
+resource "vault_policy" "team-sync" {
+  name = "team-sync"
+  policy = templatefile("${path.module}/policies/team-sync.hcl", {
+    PATH = vault_mount.secrets.path
+  })
+}
+
+resource "vault_aws_auth_backend_role" "team-sync" {
+  role                     = "team-sync"
+  bound_iam_principal_arns = [var.TEAM_SYNC_ARN]
+  token_policies           = [vault_policy.team-sync.name]
+}
+```
+
+Creates a policy and AWS auth role for the team synchronization service.
+
+### Grafana Configuration
+
+```hcl
+resource "random_password" "grafana-admin" {
+  length  = 64
+  special = false
+}
+
+resource "vault_generic_secret" "grafana" {
+  path = "${vault_mount.secrets.path}/production/default/grafana"
+
+  data_json = jsonencode({
+    "ADMIN_USER"                   = "admin"
+    "ADMIN_PASSWORD"               = random_password.grafana-admin.result
+    "GF_AUTH_GITHUB_CLIENT_ID"     = var.GF_GH_CLIENT_ID
+    "GF_AUTH_GITHUB_CLIENT_SECRET" = var.GF_GH_CLIENT_SECRET
+    "SLACK_NOTIFICATION_URL"       = var.GF_SLACK_URL
+  })
+}
+```
+
+Generates a random admin password and stores Grafana configuration secrets in Vault, including:
+- Admin credentials
+- GitHub OAuth client credentials
+- Slack notification webhook URL
+
+## Usage Example
+
+```hcl
+module "vault" {
+  source = "./modules/vault"
+
+  GF_GH_CLIENT_ID     = "Iv1.abc123def456"
+  GF_GH_CLIENT_SECRET = var.grafana_github_secret  # From variables or secrets
+  GF_SLACK_URL        = var.slack_webhook_url
+
+  SECRET_SYNC_ARN = module.secret_sync_iam.role-arn
+  TEAM_SYNC_ARN   = module.team_sync_iam.role-arn
+}
+
+# Use the secrets path output
+resource "vault_generic_secret" "app_secrets" {
+  path = "${module.vault.secrets-path}/production/my-app/config"
+
+  data_json = jsonencode({
+    DATABASE_URL = "postgres://..."
+    API_KEY      = "secret-key"
+  })
+}
+```
+
+## Module Structure
+
+The module is organized into specialized files:
+
+- `main.tf`: Core Vault resources (secrets engine, auth backends, policies)
+- `grafana.tf`: Grafana-specific secret configuration
+- `secret-sync.tf`: Secret synchronization policy and AWS auth role
+- `team-sync.tf`: Team synchronization policy and AWS auth role
+- `variables.tf`: Input variable definitions
+- `outputs.tf`: Output values
+- `policies/`: Directory containing HCL policy templates
+
+## Dependencies
+
+This module requires:
+- HashiCorp Vault provider configured
+- Vault server running and accessible
+- IAM roles created for secret-sync and team-sync (typically from the `iam` module)
+- GitHub organization access for authentication
+- AWS authentication configured in Vault
+
+## Notes
+
+- The Grafana admin password is randomly generated with 64 alphanumeric characters
+- All secrets are stored in KV v2, which provides automatic versioning
+- The SRE team from the `pennlabs` GitHub organization gets admin access
+- AWS auth roles use `bound_iam_principal_arns` to restrict access to specific IAM roles
+- Policy templates use the `PATH` variable to reference the secrets mount path dynamically

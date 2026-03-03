@@ -1,0 +1,200 @@
+---
+title: "IAM Roles and Policies"
+description: "IAM roles for service accounts with OIDC-based authentication for EKS workloads"
+---
+
+## Overview
+
+The IAM configuration creates IAM roles for Kubernetes service accounts using OIDC (OpenID Connect) authentication. This enables EKS pods to assume AWS IAM roles and access AWS services securely without managing long-lived credentials.
+
+## Core Resources
+
+### Product Service Account Roles
+
+Creates IAM roles for application workloads:
+
+```hcl
+module "iam-products" {
+  for_each          = local.iam_service_accounts
+  source            = "./modules/iam"
+  role              = each.key
+  oidc_issuer_url   = module.eks-production.cluster_oidc_issuer_url
+  oidc_provider_arn = module.eks-production.oidc_provider_arn
+}
+```
+
+**What it creates:**
+- IAM role for each product/service defined in `local.iam_service_accounts`
+- Trust policy allowing the EKS OIDC provider to assume the role
+- Role mapped to Kubernetes service accounts in the default namespace
+
+**Example services** (from `local.iam_service_accounts`):
+- `team-sync`: Syncs GitHub organization data
+- `platform`: Platform-specific AWS access
+- Other application services requiring AWS permissions
+
+### Secret Sync Role
+
+Creates a role for the secret synchronization system:
+
+```hcl
+module "iam-secret-sync" {
+  source            = "./modules/iam"
+  role              = "secret-sync"
+  namespaces        = ["default", "monitoring"]
+  oidc_issuer_url   = module.eks-production.cluster_oidc_issuer_url
+  oidc_provider_arn = module.eks-production.oidc_provider_arn
+}
+```
+
+**Configuration:**
+- Role name: `secret-sync`
+- Allowed namespaces: `default`, `monitoring`
+- Used by the secret synchronization service to sync Vault secrets to Kubernetes
+
+### Cert Manager Role
+
+Creates a role for cert-manager to manage TLS certificates:
+
+```hcl
+module "iam-cert-manager" {
+  source            = "./modules/iam"
+  role              = "cert-manager"
+  namespaces        = ["cert-manager"]
+  oidc_issuer_url   = module.eks-production.cluster_oidc_issuer_url
+  oidc_provider_arn = module.eks-production.oidc_provider_arn
+}
+```
+
+**Configuration:**
+- Role name: `cert-manager`
+- Allowed namespace: `cert-manager`
+- Used by cert-manager to perform DNS-01 challenges for Let's Encrypt certificates via Route53
+
+## IAM Module Architecture
+
+The `./modules/iam` module (referenced by all roles above) creates:
+
+1. **IAM Role** with OIDC-based assume role policy
+2. **Trust Relationship** allowing the EKS OIDC provider to assume the role
+3. **Service Account Mapping** restricting which Kubernetes service accounts can use the role
+
+### Typical Module Structure
+
+The IAM module accepts these parameters:
+
+<ParamField path="role" type="string" required>
+  Name of the IAM role (e.g., "team-sync", "secret-sync")
+</ParamField>
+
+<ParamField path="namespaces" type="list(string)" default="[default]">
+  Kubernetes namespaces allowed to use this role
+</ParamField>
+
+<ParamField path="oidc_issuer_url" type="string" required>
+  OIDC issuer URL from the EKS cluster
+</ParamField>
+
+<ParamField path="oidc_provider_arn" type="string" required>
+  ARN of the OIDC provider for the EKS cluster
+</ParamField>
+
+## OIDC Authentication Flow
+
+The OIDC-based IAM roles work as follows:
+
+1. **EKS OIDC Provider**: The EKS cluster has an OIDC identity provider registered in IAM
+2. **Service Account Annotation**: Kubernetes service accounts are annotated with the IAM role ARN
+3. **Pod Identity**: When a pod starts, it receives a projected service account token
+4. **AssumeRoleWithWebIdentity**: The AWS SDK exchanges the token for temporary AWS credentials
+5. **AWS API Access**: The pod can now call AWS APIs with the permissions of the IAM role
+
+### Example Service Account
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: team-sync
+  namespace: default
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/team-sync
+```
+
+### Example Pod Using IAM Role
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: team-sync
+  namespace: default
+spec:
+  serviceAccountName: team-sync
+  containers:
+  - name: team-sync
+    image: pennlabs/team-sync:latest
+    # AWS SDK automatically uses the IAM role from service account
+```
+
+## Benefits of OIDC-Based IAM
+
+1. **No Long-Lived Credentials**: Temporary credentials are automatically rotated
+2. **Least Privilege**: Each service gets only the permissions it needs
+3. **Namespace Isolation**: Roles can be restricted to specific namespaces
+4. **Audit Trail**: CloudTrail logs show which pod assumed which role
+5. **Native AWS Integration**: Works seamlessly with AWS SDKs
+
+## Common IAM Policies
+
+Typical permissions attached to these roles (managed within the `./modules/iam` module):
+
+### Secret Sync Permissions
+- Read/write access to AWS Secrets Manager
+- Read access to Parameter Store
+- Decrypt KMS keys for secrets
+
+### Cert Manager Permissions
+- `route53:GetChange`
+- `route53:ListHostedZones`
+- `route53:ChangeResourceRecordSets`
+- `route53:ListResourceRecordSets`
+
+### Product/Service Permissions
+- S3 bucket access for specific services
+- SES send email permissions
+- SQS/SNS access for messaging
+- CloudWatch logs and metrics
+
+## Dependencies
+
+- **EKS Module** (`eks.tf`): Provides OIDC issuer URL and provider ARN
+- **IAM Module**: Located at `./modules/iam` with reusable role creation logic
+- **Local Variables**: `local.iam_service_accounts` defines which services need IAM roles
+
+## Role ARN Outputs
+
+Each IAM module outputs the role ARN, which is used by:
+
+- **Vault Module**: References `module.iam-secret-sync.role-arn` and `module.iam-products["team-sync"].role-arn`
+- **Kubernetes Manifests**: Service account annotations reference the role ARNs
+- **Helm Charts**: Pass role ARNs as values for service account configuration
+
+## Usage Example
+
+After the IAM roles are created, annotate your Kubernetes service account:
+
+```bash
+kubectl annotate serviceaccount -n default my-app \
+  eks.amazonaws.com/role-arn=arn:aws:iam::ACCOUNT_ID:role/my-app
+```
+
+Then pods using this service account will automatically receive AWS credentials:
+
+```python
+import boto3
+
+# No credentials needed - automatically uses IAM role
+s3 = boto3.client('s3')
+s3.list_buckets()
+```

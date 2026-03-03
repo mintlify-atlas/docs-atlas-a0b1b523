@@ -1,0 +1,68 @@
+---
+title: "Installation"
+description: "Set up Kittyhawk in your project with CDK8s and TypeScript"
+---
+
+## Prerequisites
+
+Before installing Kittyhawk, ensure you have:
+
+- **Node.js** (version 14 or higher)
+- **TypeScript** knowledge
+- **CDK8s** understanding (see [CDK8s documentation](https://cdk8s.io/docs/latest/))
+- A project where you want to define Kubernetes deployments
+
+## Step 1: Set up CDK8s TypeScript Project
+
+Create a `k8s` folder within your project:
+
+```bash
+mkdir k8s
+cd k8s
+```
+
+Inside the `k8s` folder, initialize a CDK8s TypeScript project by following the [official CDK8s instructions](https://cdk8s.io/docs/latest/getting-started/#new-project).
+
+## Step 2: Install Kittyhawk
+
+Add the Kittyhawk library to your project:
+
+<CodeGroup>
+```bash yarn
+yarn add @pennlabs/kittyhawk
+```
+
+```bash npm
+npm install @pennlabs/kittyhawk
+```
+</CodeGroup>
+
+## Step 3: Verify Installation
+
+Check that Kittyhawk is installed correctly by verifying it appears in your `package.json`:
+
+```json
+{
+  "dependencies": {
+    "@pennlabs/kittyhawk": "^1.1.11",
+    "cdk8s": "^2.69.58",
+    "constructs": "^10.4.2"
+  }
+}
+```
+
+## Additional Dependencies
+
+Kittyhawk includes `cron-time-generator` as a dependency for easier cron job scheduling. This allows you to write:
+
+```typescript
+cronTime.every(5).minutes()  // Instead of */5 * * * *
+```
+
+## Next Steps
+
+Now that Kittyhawk is installed, you're ready to create your first deployment configuration.
+
+<Card title="Quickstart" icon="rocket" href="/kittyhawk/quickstart">
+  Deploy your first application with Kittyhawk
+</Card>

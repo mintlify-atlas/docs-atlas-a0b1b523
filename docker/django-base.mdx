@@ -1,0 +1,68 @@
+---
+title: Django Base Image
+description: Base Docker image for Django applications with Python and dependency management
+---
+
+[![Docker Pulls](https://img.shields.io/docker/pulls/pennlabs/django-base)](https://hub.docker.com/r/pennlabs/django-base)
+
+The `django-base` image provides a foundation for building Django applications with pre-configured Python environments and dependency management tools.
+
+## Supported Python Versions
+
+Penn Labs products use different Python versions depending on compatibility requirements. Each `django-base` release includes both "Shared" and "Simple" tags:
+
+- **Shared tag**: `[sha]` - Uses the default Python version
+- **Simple tag**: `[sha]-[python-version]` - Explicitly specifies Python version
+
+### Available Tags
+
+| Tag Pattern | Python Version | Used By |
+| --- | --- | --- |
+| `[sha]` | Python 3.11 (default) | Default for new projects |
+| `[sha]-3.11` | Python 3.11 | office-hours-queue, penn-mobile, penn-courses |
+| `[sha]-3.10` | Python 3.10.18 | Legacy projects |
+
+### Example Tag
+
+For a commit SHA `a142aa6975ee293bbc8a09ef0b81998ce7063dd3`:
+- Shared tag: `a142aa6975ee293bbc8a09ef0b81998ce7063dd3`
+- Simple tag (Python 3.10): `a142aa6975ee293bbc8a09ef0b81998ce7063dd3-python3.10`
+
+## Features
+
+The Django base image includes:
+
+- **pipenv** for dependency management
+- **mysqlclient** packages and necessary dependencies
+- Pre-configured Python environment
+- Optimized for Django applications
+
+## Usage Example
+
+Create a `Dockerfile` for your Django application:
+
+```Dockerfile
+FROM pennlabs/django-base
+
+# Copy project dependencies
+COPY Pipfile* /app/
+
+# Install project dependencies
+RUN pipenv install --system
+
+# Copy project files
+COPY . /app/
+
+# Collect static files
+RUN python3.7 /app/manage.py collectstatic --noinput
+```
+
+## Build Arguments
+
+The `django-base` image supports the `PYTHON_VERSION` build argument to specify the Python version:
+
+```Dockerfile
+docker build --build-arg PYTHON_VERSION=3.11 .
+```
+
+The default Python version is `3.10` if not specified.

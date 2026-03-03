@@ -1,0 +1,300 @@
+---
+title: Certificate Renewal
+description: Automated TLS certificate management with cert-manager and Let's Encrypt
+---
+
+## Overview
+
+TLS certificates are managed automatically using cert-manager with Let's Encrypt as the certificate authority. The system handles certificate issuance, renewal, and rotation without manual intervention.
+
+## Architecture
+
+### Components
+
+1. **cert-manager v1.11.0** - Kubernetes certificate controller
+2. **ClusterIssuer** - Let's Encrypt ACME issuer configuration
+3. **Certificate Resources** - Wildcard certificate for `*.pennlabs.org`
+4. **Route53 DNS** - DNS-01 challenge solver
+5. **IAM Role** - AWS permissions for Route53 DNS management
+
+## Installation
+
+Cert-manager is deployed via Helm (`/home/daytona/workspace/source/terraform/modules/base_cluster/cert-manager.tf:7-16`):
+
+```hcl
+resource "helm_release" "cert-manager" {
+  name       = "cert-manager"
+  repository = "https://charts.jetstack.io"
+  chart      = "cert-manager"
+  version    = "v1.11.0"
+  namespace  = "cert-manager"
+  atomic     = true
+  values     = var.cert_manager_values
+}
+```
+
+### Configuration
+
+Helm values (`/home/daytona/workspace/source/terraform/helm/cert-manager.yaml:1-14`):
+
+```yaml
+installCRDs: true
+
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::449445102765:role/cert-manager
+
+global:
+  imagePullSecrets:
+    - name: docker-pull-secret
+```
+
+**Key settings:**
+- `installCRDs: true` - Installs Custom Resource Definitions
+- IAM role annotation - Enables IRSA for Route53 access
+- Image pull secrets - Access to private Docker registry
+
+## ClusterIssuer Configuration
+
+The ClusterIssuer uses Let's Encrypt production ACME server (`/home/daytona/workspace/source/terraform/modules/base_cluster/clusterissuer.yaml:1-17`):
+
+```yaml
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: wildcard-letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: letsencrypt@pennlabs.org
+    privateKeySecretRef:
+      name: letsencrypt
+    solvers:
+      - selector: {}
+        dns01:
+          cnameStrategy: Follow
+          route53:
+            region: us-east-1
+```
+
+**Important details:**
+- Uses DNS-01 challenge for wildcard certificate validation
+- ACME account email: `letsencrypt@pennlabs.org`
+- Private key stored in `letsencrypt` secret
+- Route53 solver in `us-east-1` region
+
+## Wildcard Certificate
+
+The wildcard certificate covers the main domain and all subdomains (`/home/daytona/workspace/source/terraform/modules/base_cluster/wildcard-cert.yaml:1-17`):
+
+```yaml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: pennlabs-org
+spec:
+  secretName: pennlabs-org-tls
+  dnsNames:
+    - "pennlabs.org"
+    - "*.pennlabs.org"
+  issuerRef:
+    name: wildcard-letsencrypt-prod
+    kind: ClusterIssuer
+    group: cert-manager.io
+```
+
+**Certificate details:**
+- **Secret name**: `pennlabs-org-tls`
+- **Domains**: `pennlabs.org`, `*.pennlabs.org`
+- **Issuer**: `wildcard-letsencrypt-prod`
+
+## Automatic Renewal
+
+### How It Works
+
+1. **Monitoring**: cert-manager continuously monitors certificate expiration
+2. **Renewal trigger**: Renewal starts 30 days before expiration
+3. **DNS-01 challenge**: Creates TXT record in Route53
+4. **Validation**: Let's Encrypt validates DNS record
+5. **Issuance**: New certificate issued and stored in secret
+6. **Rotation**: Pods automatically pick up new certificate
+
+### Renewal Timeline
+
+- **Certificate lifetime**: 90 days (Let's Encrypt default)
+- **Renewal window**: Starts at 60 days remaining
+- **Retry interval**: Every hour if renewal fails
+
+### Checking Certificate Status
+
+```bash
+# View certificate resource
+kubectl get certificate pennlabs-org -o yaml
+
+# Check certificate expiration
+kubectl get certificate pennlabs-org -o jsonpath='{.status.notAfter}'
+
+# View renewal conditions
+kubectl get certificate pennlabs-org -o jsonpath='{.status.conditions[*]}' | jq
+```
+
+## Troubleshooting
+
+### Certificate Not Renewing
+
+**Check certificate status:**
+```bash
+kubectl describe certificate pennlabs-org
+```
+
+Look for `Ready: False` and check the `Message` field for errors.
+
+**Common issues:**
+
+#### 1. DNS-01 Challenge Failing
+
+**Symptom**: "Waiting for DNS-01 challenge propagation"
+
+**Check Route53 access:**
+```bash
+kubectl logs -n cert-manager deployment/cert-manager | grep route53
+```
+
+**Verify IAM permissions:**
+- cert-manager service account needs Route53 `ChangeResourceRecordSets` permission
+- Check IAM role annotation on service account
+
+#### 2. ACME Rate Limits
+
+**Symptom**: "too many certificates already issued"
+
+Let's Encrypt has rate limits:
+- 50 certificates per registered domain per week
+- 5 duplicate certificates per week
+
+**Solution**: Wait for rate limit window to reset or use staging issuer for testing
+
+#### 3. Certificate Secret Not Found
+
+**Check secret exists:**
+```bash
+kubectl get secret pennlabs-org-tls
+```
+
+**If missing, check CertificateRequest:**
+```bash
+kubectl get certificaterequest
+kubectl describe certificaterequest <name>
+```
+
+### Cert-Manager Pod Issues
+
+**Check pod status:**
+```bash
+kubectl get pods -n cert-manager
+```
+
+**View logs:**
+```bash
+kubectl logs -n cert-manager deployment/cert-manager --tail=100
+```
+
+**Restart cert-manager:**
+```bash
+kubectl rollout restart deployment/cert-manager -n cert-manager
+```
+
+### Manual Certificate Renewal
+
+<Warning>
+  Manual renewal should only be done if automatic renewal is failing and immediate renewal is required.
+</Warning>
+
+**Force renewal by deleting the secret:**
+```bash
+kubectl delete secret pennlabs-org-tls
+```
+
+Cert-manager will immediately request a new certificate.
+
+**Monitor renewal progress:**
+```bash
+kubectl get certificaterequest -w
+```
+
+## Monitoring
+
+### Certificate Expiration
+
+**Check days until expiration:**
+```bash
+kubectl get certificate pennlabs-org -o json | \
+  jq -r '.status.notAfter' | \
+  xargs -I {} date -d {} +%s | \
+  awk "{print (\$1 - $(date +%s)) / 86400}"
+```
+
+### cert-manager Events
+
+**View recent events:**
+```bash
+kubectl get events -n cert-manager --sort-by='.lastTimestamp'
+```
+
+### Certificate Metrics
+
+Cert-manager exposes Prometheus metrics:
+
+- `certmanager_certificate_expiration_timestamp_seconds` - Certificate expiration time
+- `certmanager_certificate_ready_status` - Certificate ready status
+
+## Best Practices
+
+1. **Monitor expiration** - Set up alerts for certificates expiring in less than 15 days
+2. **Use production issuer** - Avoid staging issuer in production to prevent browser warnings
+3. **Test with staging** - Use Let's Encrypt staging for development to avoid rate limits
+4. **Backup secrets** - Include certificate secrets in backup procedures
+5. **IAM least privilege** - cert-manager should only have Route53 permissions for managed zones
+6. **Pod disruption budgets** - Ensure cert-manager pod availability for renewal
+7. **Version management** - Keep cert-manager updated for security patches
+
+## Emergency Procedures
+
+### Certificate Expired
+
+If a certificate expires before renewal:
+
+1. **Delete failed certificate:**
+   ```bash
+   kubectl delete certificate pennlabs-org
+   kubectl delete secret pennlabs-org-tls
+   ```
+
+2. **Recreate certificate:**
+   ```bash
+   kubectl apply -f wildcard-cert.yaml
+   ```
+
+3. **Monitor issuance:**
+   ```bash
+   kubectl describe certificate pennlabs-org
+   ```
+
+### cert-manager Completely Broken
+
+If cert-manager is non-functional:
+
+1. **Reinstall cert-manager:**
+   ```bash
+   helm uninstall cert-manager -n cert-manager
+   kubectl delete namespace cert-manager
+   # Wait 30 seconds
+   terraform apply -target=module.base_cluster.helm_release.cert-manager
+   ```
+
+2. **Wait for initialization** (1 minute sleep is configured)
+
+3. **Recreate certificates:**
+   ```bash
+   terraform apply -target=module.base_cluster.helm_release.pennlabs-wildcard-cert
+   ```

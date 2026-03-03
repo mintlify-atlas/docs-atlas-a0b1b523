@@ -1,0 +1,47 @@
+---
+title: Docker Images Overview
+description: Docker images maintained by Penn Labs for infrastructure and applications
+---
+
+This section contains all the Docker images that Penn Labs maintains for infrastructure and applications. All images are built using [GitHub Actions](https://github.com/features/actions), tagged with their commit SHA, and pushed to [Docker Hub](https://hub.docker.com/).
+
+<Note>
+We're currently in the process of moving our Docker images into this repository. The list below is not exhaustive.
+</Note>
+
+## Maintained Images
+
+The following Docker images are maintained by Penn Labs:
+
+| Docker Image | Description |
+| --- | --- |
+| [Django base](/docker/django-base) | A base Docker image for Django applications |
+| [Waypoint](/docker/waypoint) | Unified development environment for Penn Labs products |
+| [Pg S3 Backup](/docker/pg-s3-backup) | Bundles AWS CLI and PostgreSQL for daily database backups |
+| [Shibboleth SP nginx](/docker/shibboleth-sp-nginx) | Shibboleth SP running behind nginx |
+| [Team sync](/docker/team-sync) | Syncs GitHub teams to Vault policies |
+| Datadog agent | Bundles extra integrations with the base Datadog image |
+
+## Build and Publish Process
+
+All Docker images follow a standardized build and publish process:
+
+1. **Automated Builds** - Images are built automatically using GitHub Actions
+2. **Commit SHA Tagging** - Each image is tagged with its corresponding commit SHA for traceability
+3. **Docker Hub Publishing** - Built images are pushed to [Docker Hub](https://hub.docker.com/) for distribution
+
+This ensures consistency across environments and makes it easy to track which version of the image corresponds to which code changes.
+
+## Finding Images on Docker Hub
+
+All Penn Labs Docker images are available on Docker Hub under the `pennlabs` organization. You can find them at:
+
+```
+https://hub.docker.com/u/pennlabs
+```
+
+Each image page on Docker Hub includes:
+- Available tags and versions
+- Pull statistics
+- Dockerfile and build information
+- Usage instructions

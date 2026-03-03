@@ -1,0 +1,271 @@
+---
+title: "Ingress"
+description: "Configure Kubernetes Ingress for routing external traffic to services"
+---
+
+The `Ingress` construct creates Kubernetes Ingress resources to route external HTTP/HTTPS traffic to your services. It automatically configures TLS certificates and routing rules based on domains and paths.
+
+## Constructor
+
+```typescript
+new Ingress(scope: Construct, appname: string, props: IngressProps)
+```
+
+## Properties
+
+<ParamField path="port" type="number" default="80">
+  The internal port that the service exposes. Traffic from the ingress will be routed to this port on the service.
+</ParamField>
+
+<ParamField path="rules" type="NonEmptyArray<HostRules>" required>
+  A list of host rules that configure the Ingress routing. Each rule defines a domain and the paths to route.
+</ParamField>
+
+<ParamField path="annotations" type="object" default="{}">
+  A key/value map of annotations to customize the Ingress behavior. Common uses include:
+  - Path rewriting
+  - SSL redirects
+  - Request size limits
+  - Custom NGINX configurations
+</ParamField>
+
+## HostRules Interface
+
+<ParamField path="host" type="string" required>
+  The domain name for the ingress rule (e.g., `"api.example.com"`).
+</ParamField>
+
+<ParamField path="paths" type="string[]" required>
+  Array of URL paths that should route to the service (e.g., `["/api", "/admin"]`).
+</ParamField>
+
+<ParamField path="isSubdomain" type="boolean" default="false">
+  Whether this host is a subdomain of a domain that already has a wildcard certificate. When `true`, the certificate name is generated from the parent domain.
+  
+  For example:
+  - `api.example.com` with `isSubdomain: true` → uses certificate for `example.com`
+  - `api.example.com` with `isSubdomain: false` → creates new certificate for `api.example.com`
+</ParamField>
+
+## Behavior
+
+The `Ingress` construct:
+
+1. **Generates TLS configuration**: Creates TLS entries for each host using the certificate naming convention
+2. **Creates routing rules**: Configures path-based routing for each host
+3. **Applies annotations**: Adds custom annotations to the ingress resource
+4. **Sets metadata**: Labels the ingress with `app.kubernetes.io/name`
+
+## Helper Functions
+
+### removeSubdomain
+
+```typescript
+removeSubdomain(domain: string, isSubdomain: boolean = false): string
+```
+
+Removes the subdomain from a URL if `isSubdomain` is `true`.
+
+**Examples:**
+- `removeSubdomain("api.example.com", true)` → `"example.com"`
+- `removeSubdomain("example.com", false)` → `"example.com"`
+- `removeSubdomain("app.sub.example.com", true)` → `"sub.example.com"`
+
+### domainToCertName
+
+```typescript
+domainToCertName(domain: string, isSubdomain: boolean = false): string
+```
+
+Converts a domain to a dash-separated certificate name, optionally removing the subdomain.
+
+**Examples:**
+- `domainToCertName("example.com", false)` → `"example-com"`
+- `domainToCertName("api.example.com", true)` → `"example-com"`
+- `domainToCertName("api.example.com", false)` → `"api-example-com"`
+
+## Usage Examples
+
+### Basic Ingress
+
+```typescript
+import { Ingress } from '@pennlabs/kittyhawk';
+
+new Ingress(this, 'my-app', {
+  port: 80,
+  rules: [
+    {
+      host: 'example.com',
+      paths: ['/'],
+      isSubdomain: false,
+    },
+  ],
+});
+```
+
+### Multiple Domains
+
+```typescript
+new Ingress(this, 'multi-domain', {
+  port: 8000,
+  rules: [
+    {
+      host: 'api.example.com',
+      paths: ['/api', '/admin'],
+      isSubdomain: false,
+    },
+    {
+      host: 'webhook.example.com',
+      paths: ['/'],
+      isSubdomain: false,
+    },
+  ],
+});
+```
+
+### Subdomain with Parent Certificate
+
+```typescript
+new Ingress(this, 'subdomain-app', {
+  port: 80,
+  rules: [
+    {
+      host: 'dashboard.example.com',
+      paths: ['/'],
+      isSubdomain: true, // Reuses example.com wildcard certificate
+    },
+  ],
+});
+```
+
+### Ingress with Custom Annotations
+
+```typescript
+new Ingress(this, 'custom-ingress', {
+  port: 80,
+  rules: [
+    {
+      host: 'app.example.com',
+      paths: ['/'],
+    },
+  ],
+  annotations: {
+    'nginx.ingress.kubernetes.io/rewrite-target': '/$2',
+    'nginx.ingress.kubernetes.io/ssl-redirect': 'true',
+    'nginx.ingress.kubernetes.io/proxy-body-size': '50m',
+    'cert-manager.io/cluster-issuer': 'letsencrypt-prod',
+  },
+});
+```
+
+### Path-Based Routing
+
+```typescript
+new Ingress(this, 'api', {
+  port: 8000,
+  rules: [
+    {
+      host: 'example.com',
+      paths: ['/api/v1', '/api/v2', '/health'],
+    },
+  ],
+});
+```
+
+### WebSocket Support
+
+```typescript
+new Ingress(this, 'websocket-app', {
+  port: 8000,
+  rules: [
+    {
+      host: 'api.example.com',
+      paths: ['/ws'],
+    },
+  ],
+  annotations: {
+    'nginx.ingress.kubernetes.io/websocket-services': 'websocket-app',
+    'nginx.ingress.kubernetes.io/proxy-read-timeout': '3600',
+    'nginx.ingress.kubernetes.io/proxy-send-timeout': '3600',
+  },
+});
+```
+
+## TLS Configuration
+
+The ingress automatically configures TLS based on the host rules:
+
+```yaml
+tls:
+  - hosts:
+      - example.com
+    secretName: example-com-tls
+  - hosts:
+      - api.example.com
+    secretName: api-example-com-tls
+```
+
+The secret names follow the pattern `{certName}-tls` where `certName` is generated using `domainToCertName()`.
+
+## Common Annotations
+
+Here are some commonly used NGINX Ingress annotations:
+
+```typescript
+annotations: {
+  // SSL and redirects
+  'nginx.ingress.kubernetes.io/ssl-redirect': 'true',
+  'nginx.ingress.kubernetes.io/force-ssl-redirect': 'true',
+  
+  // Path rewriting
+  'nginx.ingress.kubernetes.io/rewrite-target': '/',
+  
+  // Request limits
+  'nginx.ingress.kubernetes.io/proxy-body-size': '50m',
+  'nginx.ingress.kubernetes.io/proxy-read-timeout': '3600',
+  
+  // CORS
+  'nginx.ingress.kubernetes.io/enable-cors': 'true',
+  'nginx.ingress.kubernetes.io/cors-allow-origin': '*',
+  
+  // Rate limiting
+  'nginx.ingress.kubernetes.io/limit-rps': '10',
+}
+```
+
+## Generated Kubernetes Resource
+
+The construct generates an Ingress resource like:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: my-app
+  labels:
+    app.kubernetes.io/name: my-app
+  annotations:
+    # Your custom annotations
+spec:
+  tls:
+    - hosts:
+        - example.com
+      secretName: example-com-tls
+  rules:
+    - host: example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: my-app
+                port:
+                  number: 80
+```
+
+## Related
+
+- [Certificates](/kittyhawk/certificates) - TLS certificate management
+- [DjangoApplication](/kittyhawk/django-application) - Uses Ingress internally
+- [ReactApplication](/kittyhawk/react-application) - Uses Ingress internally
