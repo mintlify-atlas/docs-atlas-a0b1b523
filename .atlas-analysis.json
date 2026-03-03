@@ -1,0 +1,198 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "Penn Labs Infrastructure",
+  "projectDescription": "Kubernetes infrastructure and deployment tooling for Penn Labs products",
+  "theme": "aspen",
+  "primaryColor": "#011F5B",
+  "lightColor": "#82AAFF",
+  "darkColor": "#990000",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Overview",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "architecture"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Terraform",
+        "groups": [
+          {
+            "group": "Setup",
+            "pages": [
+              "terraform/overview",
+              "terraform/bootstrapping"
+            ]
+          },
+          {
+            "group": "Infrastructure Components",
+            "pages": [
+              "terraform/eks",
+              "terraform/rds",
+              "terraform/vpc",
+              "terraform/vault",
+              "terraform/iam"
+            ]
+          },
+          {
+            "group": "Modules",
+            "pages": [
+              "terraform/modules/base-cluster",
+              "terraform/modules/domain",
+              "terraform/modules/iam-module",
+              "terraform/modules/vault-module"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Kittyhawk",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "kittyhawk/overview",
+              "kittyhawk/installation",
+              "kittyhawk/quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "kittyhawk/charts",
+              "kittyhawk/applications",
+              "kittyhawk/deployments",
+              "kittyhawk/cronjobs"
+            ]
+          },
+          {
+            "group": "Components",
+            "pages": [
+              "kittyhawk/django-application",
+              "kittyhawk/react-application",
+              "kittyhawk/redis-application",
+              "kittyhawk/ingress",
+              "kittyhawk/certificates"
+            ]
+          },
+          {
+            "group": "CI Integration",
+            "pages": [
+              "kittyhawk/github-actions",
+              "kittyhawk/yaml-generation"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Kraken",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "kraken/overview",
+              "kraken/installation",
+              "kraken/quickstart"
+            ]
+          },
+          {
+            "group": "Workflows",
+            "pages": [
+              "kraken/labs-application-stack",
+              "kraken/django-project",
+              "kraken/react-project",
+              "kraken/deploy-job"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "kraken/custom-workflows",
+              "kraken/docker-builds",
+              "kraken/integration-tests"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Docker",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "docker/overview"
+            ]
+          },
+          {
+            "group": "Images",
+            "pages": [
+              "docker/django-base",
+              "docker/waypoint",
+              "docker/pg-s3-backup",
+              "docker/shibboleth-sp-nginx",
+              "docker/team-sync"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Operations",
+        "groups": [
+          {
+            "group": "Deployment",
+            "pages": [
+              "operations/deployment-guide",
+              "operations/secrets-management",
+              "operations/rollbacks"
+            ]
+          },
+          {
+            "group": "Monitoring",
+            "pages": [
+              "operations/grafana-dashboards",
+              "operations/alerting",
+              "operations/logging"
+            ]
+          },
+          {
+            "group": "Maintenance",
+            "pages": [
+              "operations/database-backups",
+              "operations/certificate-renewal",
+              "operations/cluster-upgrades"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Terraform configurations for AWS EKS, RDS, VPC, and Vault",
+    "Kittyhawk: TypeScript-based Kubernetes YAML generator using CDK8s",
+    "Kraken: GitHub Actions workflow constructs for CI/CD pipelines",
+    "Waypoint: Unified development environment for Penn Labs products",
+    "Custom Docker images for Django, PostgreSQL backups, and authentication",
+    "Helm chart deployments for monitoring and infrastructure services"
+  ],
+  "publicApiSurface": [
+    "@pennlabs/kittyhawk - PennLabsChart",
+    "@pennlabs/kittyhawk - DjangoApplication",
+    "@pennlabs/kittyhawk - ReactApplication",
+    "@pennlabs/kittyhawk - RedisApplication",
+    "@pennlabs/kittyhawk - CronJob",
+    "@pennlabs/kraken - LabsApplicationStack",
+    "@pennlabs/kraken - DjangoProject",
+    "@pennlabs/kraken - ReactProject",
+    "@pennlabs/kraken - DeployJob",
+    "waypoint-client - CLI tool for managing development containers",
+    "waypoint - Container CLI for service management",
+    "pennlabs/django-base - Base Docker image for Django",
+    "pennlabs/waypoint - Development environment container"
+  ]
+}
